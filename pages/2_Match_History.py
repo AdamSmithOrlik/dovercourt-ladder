@@ -28,4 +28,4 @@ display_cols = [
     "submitted_by_email",
 ]
 
-st.dataframe(matches_df[display_cols], use_container_width=True)
+st.dataframe(matches_df[display_cols], width="content", hide_index=False)

@@ -11,6 +11,7 @@ with st.form("signup_form"):
     name = st.text_input("Full Name")
     email = st.text_input("Email")
     submitted = st.form_submit_button("Sign Up")
+    # agree = st.checkbox("I want to join the ladder")
 
 if submitted:
     name = name.strip()
@@ -49,13 +50,10 @@ if players:
     display_df = players_df.rename(
         columns={
             "name": "Player Name",
-            "email": "Email",
             "active": "Active",
         }
     )
-    cols = [c for c in ["Player Name", "Email", "Active"] if c in display_df.columns]
-    st.dataframe(display_df[cols], use_container_width=True, hide_index=True)
+    cols = [c for c in ["Player Name", "Active"] if c in display_df.columns]
+    st.dataframe(display_df[cols], width="content", hide_index=True)
 else:
     st.info("No players found.")
-
-# agree = st.checkbox("I want to join the ladder")
