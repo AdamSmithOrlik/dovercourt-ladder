@@ -12,6 +12,8 @@ from db import (
     update_player_active_status,
     update_match,
     update_set,
+    get_ladder_snapshot,
+    get_latest_match_year_and_round,
 )
 
 from utils.rankings import compute_rankings
@@ -41,6 +43,25 @@ players_df = pd.DataFrame(players)
 matches_df = pd.DataFrame(matches) if matches else pd.DataFrame()
 
 player_name_map = {p["player_id"]: p["name"] for p in players}
+
+def get_default_year_and_round() -> tuple[int, int]:
+    """
+    Default behavior:
+    - Start from latest round that has matches.
+    - If the next round already has a snapshot, that means it has started,
+      so use that as the default round instead.
+    """
+    default_year, default_round = get_latest_match_year_and_round()
+
+    next_round_snapshot = get_ladder_snapshot(default_year, default_round + 1)
+    if next_round_snapshot:
+        return default_year, default_round + 1
+
+    current_round_snapshot = get_ladder_snapshot(default_year, default_round)
+    if current_round_snapshot:
+        return default_year, default_round
+
+    return default_year, default_round
 
 
 # -----------------------------------------------------
@@ -161,6 +182,8 @@ elif st.session_state.active_page == "submit":
         st.error("No players found.")
         st.stop()
 
+    DEFAULT_YEAR, DEFAULT_ROUND = get_default_year_and_round()
+
     player_options = {p["name"]: p["player_id"] for p in players}
 
     # -----------------------------
@@ -189,7 +212,7 @@ elif st.session_state.active_page == "submit":
     suggested_winner = None
 
     if parsed_preview:
-
+        
         parsed_sets, p_sets, o_sets = parsed_preview
 
         preview = ", ".join(
@@ -226,6 +249,13 @@ elif st.session_state.active_page == "submit":
 
         match_date = st.date_input("Match Date")
 
+        match_round = st.number_input(
+            "Round",
+            min_value=1,
+            step=1,
+            value=int(DEFAULT_ROUND)
+        )
+
         submitted = st.form_submit_button("Submit Match")
 
     # -----------------------------
@@ -233,6 +263,10 @@ elif st.session_state.active_page == "submit":
     # -----------------------------
 
     if submitted:
+
+        if player_name == opponent_name:
+            st.error("Player and opponent cannot be the same.")
+            st.stop()
 
         parsed_result = parse_score_flexible(score_text)
 
@@ -252,6 +286,7 @@ elif st.session_state.active_page == "submit":
             "winner_id": winner_id,
             "type": match_type,
             "match_date": str(match_date),
+            "round": int(match_round),
         }
 
         match_row = insert_match(match_data)
@@ -266,11 +301,10 @@ elif st.session_state.active_page == "submit":
 
         insert_sets(sets_rows)
 
-        st.success("Match submitted successfully.")
+        st.success(f"Match submitted successfully for round {int(match_round)}.")
 
         st.session_state.active_page = None
         st.rerun()
-
 
 # -----------------------------------------------------
 # SIGN UP

@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
+import pandas as pd
 
 
 @st.cache_resource
@@ -37,6 +38,15 @@ def update_player_active_status(email: str, active: bool):
     )
     return response.data
 
+def get_active_players():
+    supabase = get_supabase()
+    response = (
+        supabase.table("players")
+        .select("*")
+        .eq("active", True)
+        .execute()
+    )
+    return response.data
 
 def insert_match(match_data: dict):
     supabase = get_supabase()
@@ -164,3 +174,107 @@ def update_set(set_id: str, set_data: dict):
     supabase = get_supabase()
     response = supabase.table("sets").update(set_data).eq("set_id", set_id).execute()
     return response.data
+
+def get_matches_for_year(year: int):
+    supabase = get_supabase()
+    start_date = f"{year}-01-01"
+    end_date = f"{year + 1}-01-01"
+
+    response = (
+        supabase.table("matches")
+        .select("*")
+        .gte("match_date", start_date)
+        .lt("match_date", end_date)
+        .order("match_date")
+        .order("match_id")
+        .execute()
+    )
+    return response.data
+
+
+def get_matches_for_year_and_round(year: int, round_number: int):
+    supabase = get_supabase()
+    start_date = f"{year}-01-01"
+    end_date = f"{year + 1}-01-01"
+
+    response = (
+        supabase.table("matches")
+        .select("*")
+        .gte("match_date", start_date)
+        .lt("match_date", end_date)
+        .eq("round", round_number)
+        .order("match_date")
+        .order("match_id")
+        .execute()
+    )
+    return response.data
+
+
+def get_ladder_snapshot(year: int, round_number: int):
+    supabase = get_supabase()
+    response = (
+        supabase.table("ladder_snapshots")
+        .select("*")
+        .eq("year", year)
+        .eq("round", round_number)
+        .order("rank")
+        .execute()
+    )
+    return response.data
+
+
+def delete_ladder_snapshot(year: int, round_number: int):
+    supabase = get_supabase()
+    response = (
+        supabase.table("ladder_snapshots")
+        .delete()
+        .eq("year", year)
+        .eq("round", round_number)
+        .execute()
+    )
+    return response.data
+
+
+def insert_ladder_snapshot(rows: list[dict]):
+    if not rows:
+        return []
+
+    supabase = get_supabase()
+    response = supabase.table("ladder_snapshots").insert(rows).execute()
+    return response.data
+
+def get_latest_match_year_and_round():
+    """
+    Returns:
+        tuple[int | None, int | None]
+        (latest_year, latest_round)
+    """
+    supabase = get_supabase()
+
+    response = (
+        supabase.table("matches")
+        .select("match_date, round")
+        .order("match_date", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None, None
+
+    latest_match = response.data[0]
+
+    match_date = latest_match.get("match_date")
+    round_value = latest_match.get("round")
+
+    if not match_date:
+        return None, None
+
+    latest_year = pd.to_datetime(match_date).year
+
+    try:
+        latest_round = int(round_value) if round_value is not None else None
+    except Exception:
+        latest_round = None
+
+    return latest_year, latest_round

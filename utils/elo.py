@@ -14,7 +14,12 @@ DEFAULT_INITIAL_RATING = 1500.0
 DEFAULT_K_BASE = 24.0
 DEFAULT_ALPHA = 1.0
 DEFAULT_ELO_YEAR = 2025
-DEFAULT_2025_SEASON_START = "2025-04-01"
+DEFAULT_SEASON_START_MONTH_DAY = "04-01"
+
+
+def default_season_start_date(year: int) -> str:
+    """Return the default season start date for a given year."""
+    return f"{year}-{DEFAULT_SEASON_START_MONTH_DAY}"
 
 
 def expected_score(rating_a: float, rating_b: float) -> float:
@@ -325,17 +330,10 @@ def build_elo_data_for_year(
     season_start_date: str | None = None,
     season_end_date: str | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Load source data and return (time_series_df, latest_standings_df).
+    """Load source data and return (time_series_df, latest_standings_df)."""
+    if season_start_date is None:
+        season_start_date = default_season_start_date(year)
 
-    Returns
-    -------
-    Tuple[pd.DataFrame, pd.DataFrame]
-        - time_series_df columns:
-          [date, match_id, player_id, player_name, opponent_id, elo, elo_change,
-           effective_k, margin_multiplier]
-        - latest_standings_df columns:
-          [player_id, player_name, elo]
-    """
     matches_df, sets_df, players_df = load_elo_source_data(
         year=year,
         season_start_date=season_start_date,
@@ -352,35 +350,41 @@ def build_elo_data_for_year(
     )
 
 
-def get_elo_time_series_2025(
+def get_elo_time_series(
+    year: int = DEFAULT_ELO_YEAR,
     initial_rating: float = DEFAULT_INITIAL_RATING,
     k_base: float = DEFAULT_K_BASE,
     alpha: float = DEFAULT_ALPHA,
-    season_start_date: str | None = DEFAULT_2025_SEASON_START,
+    season_start_date: str | None = None,
+    season_end_date: str | None = None,
 ) -> pd.DataFrame:
-    """Convenience helper returning 2025 Elo time-series data."""
+    """Convenience helper returning Elo time-series data for a given year."""
     time_series_df, _ = build_elo_data_for_year(
-        year=DEFAULT_ELO_YEAR,
+        year=year,
         initial_rating=initial_rating,
         k_base=k_base,
         alpha=alpha,
         season_start_date=season_start_date,
+        season_end_date=season_end_date,
     )
     return time_series_df
 
 
-def get_latest_elo_standings_2025(
+def get_latest_elo_standings(
+    year: int = DEFAULT_ELO_YEAR,
     initial_rating: float = DEFAULT_INITIAL_RATING,
     k_base: float = DEFAULT_K_BASE,
     alpha: float = DEFAULT_ALPHA,
-    season_start_date: str | None = DEFAULT_2025_SEASON_START,
+    season_start_date: str | None = None,
+    season_end_date: str | None = None,
 ) -> pd.DataFrame:
-    """Convenience helper returning latest 2025 Elo standings."""
+    """Convenience helper returning latest Elo standings for a given year."""
     _, standings_df = build_elo_data_for_year(
-        year=DEFAULT_ELO_YEAR,
+        year=year,
         initial_rating=initial_rating,
         k_base=k_base,
         alpha=alpha,
         season_start_date=season_start_date,
+        season_end_date=season_end_date,
     )
     return standings_df
