@@ -5,19 +5,20 @@ from db import (
     get_players,
     get_matches,
     get_sets,
+    get_all_sets,
     insert_match,
     insert_sets,
     insert_player,
     update_player_active_status,
     update_match,
-    update_set
+    update_set,
+    get_ladder_snapshot,
+    get_latest_match_year_and_round,
 )
 
 from utils.rankings import compute_rankings
 from utils.constants import MATCH_TYPES
 from utils.score_parser import parse_score_flexible
-
-from utils.rounds import get_current_round_from_date
 
 st.set_page_config(page_title="Dovercourt Ladder", layout="wide")
 
@@ -43,9 +44,28 @@ matches_df = pd.DataFrame(matches) if matches else pd.DataFrame()
 
 player_name_map = {p["player_id"]: p["name"] for p in players}
 
+def get_default_year_and_round() -> tuple[int, int]:
+    """
+    Default behavior:
+    - Start from latest round that has matches.
+    - If the next round already has a snapshot, that means it has started,
+      so use that as the default round instead.
+    """
+    default_year, default_round = get_latest_match_year_and_round()
+
+    next_round_snapshot = get_ladder_snapshot(default_year, default_round + 1)
+    if next_round_snapshot:
+        return default_year, default_round + 1
+
+    current_round_snapshot = get_ladder_snapshot(default_year, default_round)
+    if current_round_snapshot:
+        return default_year, default_round
+
+    return default_year, default_round
+
 
 # -----------------------------------------------------
-# ACTION BUTTONS
+# ACTION BUTTONS 
 # -----------------------------------------------------
 
 st.subheader("Actions")
@@ -162,6 +182,8 @@ elif st.session_state.active_page == "submit":
         st.error("No players found.")
         st.stop()
 
+    DEFAULT_YEAR, DEFAULT_ROUND = get_default_year_and_round()
+
     player_options = {p["name"]: p["player_id"] for p in players}
 
     # -----------------------------
@@ -190,7 +212,7 @@ elif st.session_state.active_page == "submit":
     suggested_winner = None
 
     if parsed_preview:
-
+        
         parsed_sets, p_sets, o_sets = parsed_preview
 
         preview = ", ".join(
@@ -227,84 +249,12 @@ elif st.session_state.active_page == "submit":
 
         match_date = st.date_input("Match Date")
 
-        submitted = st.form_submit_button("Submit Match")
-
-    # -----------------------------
-    # SUBMIT
-    # -----------------------------
-
-elif st.session_state.active_page == "submit":
-
-    st.header("Submit Match")
-
-    if not players:
-        st.error("No players found.")
-        st.stop()
-
-    player_options = {p["name"]: p["player_id"] for p in players}
-
-    # -----------------------------
-    # PLAYER SELECTION (outside form)
-    # -----------------------------
-
-    player_name = st.selectbox(
-        "Player",
-        list(player_options.keys()),
-        key="submit_player"
-    )
-
-    opponent_name = st.selectbox(
-        "Opponent",
-        list(player_options.keys()),
-        key="submit_opponent"
-    )
-
-    score_text = st.text_input(
-        "Score",
-        placeholder="Examples: 6-4 4-6 10-8 | 8-6"
-    )
-
-    parsed_preview = parse_score_flexible(score_text)
-
-    suggested_winner = None
-
-    if parsed_preview:
-
-        parsed_sets, p_sets, o_sets = parsed_preview
-
-        preview = ", ".join(
-            f"{s['player_games']}-{s['opponent_games']}"
-            for s in parsed_sets
+        match_round = st.number_input(
+            "Round",
+            min_value=1,
+            step=1,
+            value=int(DEFAULT_ROUND)
         )
-
-        st.caption(f"Parsed sets: {preview}")
-
-        if p_sets > o_sets:
-            suggested_winner = player_name
-        elif o_sets > p_sets:
-            suggested_winner = opponent_name
-
-    st.subheader("Confirm Winner")
-
-    winner_name = st.radio(
-        "Winner",
-        options=[player_name, opponent_name],
-        index=0 if suggested_winner != opponent_name else 1,
-        horizontal=True
-    )
-
-    # -----------------------------
-    # FORM (only for submission)
-    # -----------------------------
-
-    with st.form("match_form"):
-
-        match_type = st.selectbox(
-            "Match Type",
-            MATCH_TYPES
-        )
-
-        match_date = st.date_input("Match Date")
 
         submitted = st.form_submit_button("Submit Match")
 
@@ -330,20 +280,13 @@ elif st.session_state.active_page == "submit":
         opponent_id = player_options[opponent_name]
         winner_id = player_options[winner_name]
 
-        match_date_obj = match_date if not isinstance(match_date, datetime) else match_date.date()
-        calculated_year, calculated_round = get_current_round_from_date(match_date_obj)
-
-        if calculated_round is None:
-            st.error("That match date does not fall within a valid ladder round.")
-            st.stop()
-
         match_data = {
             "player_id": player_id,
             "opponent_id": opponent_id,
             "winner_id": winner_id,
             "type": match_type,
             "match_date": str(match_date),
-            "round": int(calculated_round),
+            "round": int(match_round),
         }
 
         match_row = insert_match(match_data)
@@ -358,7 +301,7 @@ elif st.session_state.active_page == "submit":
 
         insert_sets(sets_rows)
 
-        st.success(f"Match submitted successfully for round {int(calculated_round)}.")
+        st.success(f"Match submitted successfully for round {int(match_round)}.")
 
         st.session_state.active_page = None
         st.rerun()

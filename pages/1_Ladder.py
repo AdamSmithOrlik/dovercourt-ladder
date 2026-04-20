@@ -5,88 +5,57 @@ from db import (
     get_active_players,
     get_players,
     get_matches_for_year,
-    get_matches,
-    get_sets,
     get_matches_for_year_and_round,
-    get_ladder_snapshot,
-    delete_ladder_snapshot,
-    insert_ladder_snapshot,
-    get_latest_match_year_and_round,
+    get_sets,
 )
 
-from utils.elo import get_latest_elo_standings
+from utils.elo import get_latest_elo_standings, get_elo_time_series
+from utils.rounds import (
+    get_round_window,
+    get_current_round_from_date,
+    get_last_completed_round_from_date,
+    get_default_round_for_year,
+    get_season_start_date,
+    get_round_cutoff_exclusive,
+)
 
 st.set_page_config(page_title="Ladder", layout="wide")
 st.title("Ladder")
 
 BOX_SIZE = 5
+BOX_SIZE = 5
+
+# ---------------------------------------------------
+# Box helpers
+# ---------------------------------------------------
+
+def assign_boxes(df: pd.DataFrame, box_size: int = 5) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    df = df.copy()
+    df["box"] = ((df["rank"] - 1) // box_size) + 1
+
+    last_box = int(df["box"].max())
+    last_box_count = int((df["box"] == last_box).sum())
+
+    if last_box > 1 and last_box_count < box_size:
+        df.loc[df["box"] == last_box, "box"] = last_box - 1
+
+    return df
 
 
 # ---------------------------------------------------
-# Helpers
+# Stats helpers
 # ---------------------------------------------------
-
-def get_default_year_and_round() -> tuple[int, int]:
-    """
-    Default behavior:
-    - Start from latest round that has matches.
-    - If the *next* round already has a snapshot, use that as the default instead.
-      Example:
-        latest matches = round 7
-        snapshot exists for round 8
-        => default round is 8
-    """
-    default_year, default_round = get_latest_match_year_and_round()
-
-    next_round_snapshot = get_ladder_snapshot(default_year, default_round + 1)
-    if next_round_snapshot:
-        return default_year, default_round + 1
-
-    current_round_snapshot = get_ladder_snapshot(default_year, default_round)
-    if current_round_snapshot:
-        return default_year, default_round
-
-    return default_year, default_round
-
-
-def get_year_options(matches_df: pd.DataFrame, default_year: int) -> list[int]:
-    if matches_df.empty:
-        return [default_year]
-
-    year_options = sorted(matches_df["year"].dropna().unique().tolist())
-    if default_year not in year_options:
-        year_options.append(default_year)
-        year_options = sorted(year_options)
-
-    return year_options
-
-
-def get_round_options_for_year(matches_df: pd.DataFrame, selected_year: int, default_round: int) -> list[int]:
-    """
-    Include:
-    - all rounds that have matches
-    - the default round
-    - the next round if it already has a snapshot
-    """
-    round_options = set()
-
-    if not matches_df.empty:
-        year_match_rounds = matches_df.loc[
-            matches_df["year"] == selected_year, "round"
-        ].dropna().astype(int).tolist()
-        round_options.update(year_match_rounds)
-
-    round_options.add(default_round)
-
-    # Also include default_round + 1 if that snapshot exists
-    next_snapshot = get_ladder_snapshot(selected_year, default_round + 1)
-    if next_snapshot:
-        round_options.add(default_round + 1)
-
-    return sorted(round_options)
-
 
 def build_player_stats(year: int, round_number: int) -> pd.DataFrame:
+    """
+    Live stats for display:
+    - live Elo for the year
+    - overall wins/losses for the year
+    - current round wins/losses
+    """
     active_players = get_active_players()
     active_df = pd.DataFrame(active_players) if active_players else pd.DataFrame()
 
@@ -103,7 +72,12 @@ def build_player_stats(year: int, round_number: int) -> pd.DataFrame:
             ]
         )
 
-    standings_df = get_latest_elo_standings(year=year)
+    season_start_date = get_season_start_date(year)
+
+    standings_df = get_latest_elo_standings(
+        year=year,
+        season_start_date=season_start_date,
+    )
     standings_df = (
         standings_df.copy()
         if standings_df is not None and not standings_df.empty
@@ -162,7 +136,7 @@ def build_player_stats(year: int, round_number: int) -> pd.DataFrame:
         wins_df = pd.DataFrame(columns=["player_id", "wins"])
         losses_df = pd.DataFrame(columns=["player_id", "losses"])
 
-    # Round wins / losses
+    # Current round wins / losses
     if not round_matches_df.empty:
         round_wins_df = (
             round_matches_df.groupby("winner_id")
@@ -209,7 +183,93 @@ def build_player_stats(year: int, round_number: int) -> pd.DataFrame:
     return player_base
 
 
+def build_last_completed_round_order_stats(year: int, completed_round: int) -> pd.DataFrame:
+    """
+    Ordering stats from the last completed round only.
+
+    Order should be:
+    1. Elo as of the end of the last completed round
+    2. wins in the last completed round
+    3. player name
+    """
+    active_players = get_active_players()
+    active_df = pd.DataFrame(active_players) if active_players else pd.DataFrame()
+
+    if active_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "player_id",
+                "player_name",
+                "completed_round_elo",
+                "completed_round_wins",
+            ]
+        )
+
+    player_base = active_df[["player_id", "name"]].copy()
+    player_base = player_base.rename(columns={"name": "player_name"})
+
+    round_window = get_round_window(year, completed_round)
+    season_start_date = get_season_start_date(year)
+
+    if round_window is None or season_start_date is None:
+        player_base["completed_round_elo"] = 1500.0
+        player_base["completed_round_wins"] = 0
+        return player_base
+
+    completed_round_end_exclusive = get_round_cutoff_exclusive(round_window["end_date"])
+
+    completed_round_elo_df = get_latest_elo_standings(
+        year=year,
+        season_start_date=season_start_date,
+        season_end_date=completed_round_end_exclusive,
+    )
+
+    completed_round_elo_df = (
+        completed_round_elo_df.copy()
+        if completed_round_elo_df is not None and not completed_round_elo_df.empty
+        else pd.DataFrame(columns=["player_id", "elo"])
+    )
+
+    round_matches = get_matches_for_year_and_round(year, completed_round)
+    round_matches_df = pd.DataFrame(round_matches) if round_matches else pd.DataFrame()
+
+    if not completed_round_elo_df.empty:
+        player_base = player_base.merge(
+            completed_round_elo_df[["player_id", "elo"]],
+            on="player_id",
+            how="left",
+        )
+        player_base = player_base.rename(columns={"elo": "completed_round_elo"})
+    else:
+        player_base["completed_round_elo"] = 1500.0
+
+    if not round_matches_df.empty:
+        wins_df = (
+            round_matches_df.groupby("winner_id")
+            .size()
+            .reset_index(name="completed_round_wins")
+            .rename(columns={"winner_id": "player_id"})
+        )
+    else:
+        wins_df = pd.DataFrame(columns=["player_id", "completed_round_wins"])
+
+    player_base = player_base.merge(wins_df, on="player_id", how="left")
+
+    player_base["completed_round_elo"] = pd.to_numeric(
+        player_base["completed_round_elo"], errors="coerce"
+    ).fillna(1500.0)
+    player_base["completed_round_wins"] = (
+        player_base["completed_round_wins"].fillna(0).astype(int)
+    )
+
+    return player_base
+
+
 def compute_live_ranking(stats_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fallback ranking when no completed round exists yet,
+    or for non-2026 years.
+    """
     if stats_df.empty:
         return stats_df.copy()
 
@@ -219,94 +279,91 @@ def compute_live_ranking(stats_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
     ranked["rank"] = range(1, len(ranked) + 1)
-    ranked["box"] = ((ranked["rank"] - 1) // BOX_SIZE) + 1
+    ranked = assign_boxes(ranked, BOX_SIZE)
 
     return ranked
 
 
-def load_display_ladder(year: int, round_number: int) -> tuple[pd.DataFrame, bool]:
+def compute_frozen_order_from_last_completed_round(
+    live_stats_df: pd.DataFrame,
+    year: int,
+    completed_round: int,
+) -> pd.DataFrame:
     """
-    Returns:
-        df: ladder to display
-        is_snapshot: True if using frozen snapshot, False if using live ranking
+    Freeze displayed order from the last completed round:
+    1. completed round Elo
+    2. completed round wins
+    3. player name
+
+    Displayed stats remain live.
     """
-    stats_df = build_player_stats(year, round_number)
-    if stats_df.empty:
-        return stats_df, False
+    if live_stats_df.empty:
+        return live_stats_df.copy()
 
-    snapshot_rows = get_ladder_snapshot(year, round_number)
-    snapshot_df = pd.DataFrame(snapshot_rows) if snapshot_rows else pd.DataFrame()
+    order_df = build_last_completed_round_order_stats(year, completed_round)
 
-    if snapshot_df.empty:
-        live_df = compute_live_ranking(stats_df)
-        return live_df, False
-
-    display_df = snapshot_df.merge(
-        stats_df[["player_id", "player_name", "wins", "losses", "round_wins", "round_losses", "elo"]],
-        on="player_id",
+    ranked = live_stats_df.merge(
+        order_df[
+            ["player_id", "player_name", "completed_round_elo", "completed_round_wins"]
+        ],
+        on=["player_id", "player_name"],
         how="left",
-        suffixes=("_snapshot", ""),
     )
 
-    # keep frozen order, but display current stats
-    display_df = display_df.sort_values("rank").reset_index(drop=True)
-    display_df["box"] = display_df["box"].astype(int)
-    display_df["rank"] = display_df["rank"].astype(int)
-    display_df["wins"] = display_df["wins"].fillna(0).astype(int)
-    display_df["losses"] = display_df["losses"].fillna(0).astype(int)
-    display_df["round_wins"] = display_df["round_wins"].fillna(0).astype(int)
-    display_df["round_losses"] = display_df["round_losses"].fillna(0).astype(int)
-    display_df["elo"] = pd.to_numeric(display_df["elo"], errors="coerce").fillna(1500.0)
+    ranked["completed_round_elo"] = pd.to_numeric(
+        ranked["completed_round_elo"], errors="coerce"
+    ).fillna(1500.0)
+    ranked["completed_round_wins"] = (
+        ranked["completed_round_wins"].fillna(0).astype(int)
+    )
 
-    return display_df, True
+    ranked = ranked.sort_values(
+        ["completed_round_elo", "completed_round_wins", "player_name"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
 
+    ranked["rank"] = range(1, len(ranked) + 1)
+    ranked = assign_boxes(ranked, BOX_SIZE)
 
-def save_snapshot(year: int, round_number: int, ranked_df: pd.DataFrame):
-    if ranked_df.empty:
-        return
-
-    existing_snapshot = get_ladder_snapshot(year, round_number)
-    if existing_snapshot:
-        raise ValueError(f"Snapshot already exists for round {round_number} in {year}.")
-
-    rows = []
-    for _, row in ranked_df.iterrows():
-        rows.append(
-            {
-                "year": year,
-                "round": round_number,
-                "player_id": row["player_id"],
-                "rank": int(row["rank"]),
-                "box": int(row["box"]),
-                "elo": float(row["elo"]),
-                "wins": int(row["wins"]),
-                "losses": int(row["losses"]),
-            }
-        )
-
-    insert_ladder_snapshot(rows)
+    return ranked
 
 
-def begin_new_round(year: int, closed_round_number: int):
+def load_display_ladder(year: int, current_round: int) -> tuple[pd.DataFrame, str]:
     """
-    Create the next round snapshot from current live Elo order.
-    Example:
-      closed_round_number = 7
-      writes snapshot for round 8
+    2026:
+    - order frozen from last completed round
+    - stats live
+
+    2025:
+    - live Elo order
+    - stats live
     """
-    next_round = closed_round_number + 1
+    live_stats_df = build_player_stats(year, current_round)
+    if live_stats_df.empty:
+        return live_stats_df, "No ladder data"
 
-    next_round_existing = get_ladder_snapshot(year, next_round)
-    if next_round_existing:
-        raise ValueError(f"Round {next_round} already has a snapshot.")
+    if year != 2026:
+        live_df = compute_live_ranking(live_stats_df)
+        return live_df, f"Live ladder for {year}"
 
-    final_stats_df = build_player_stats(year, closed_round_number)
-    if final_stats_df.empty:
-        raise ValueError("No active players found. Cannot begin a new round.")
+    completed_year, completed_round = get_last_completed_round_from_date()
 
-    next_round_rank_df = compute_live_ranking(final_stats_df)
-    save_snapshot(year, next_round, next_round_rank_df)
+    if completed_year is None or completed_round is None or completed_year != year:
+        live_df = compute_live_ranking(live_stats_df)
+        return live_df, "Live ladder preview (no completed round yet)"
 
+    frozen_df = compute_frozen_order_from_last_completed_round(
+        live_stats_df=live_stats_df,
+        year=year,
+        completed_round=completed_round,
+    )
+
+    return frozen_df, f"Order frozen from round {completed_round}; stats are live"
+
+
+# ---------------------------------------------------
+# Match detail helper
+# ---------------------------------------------------
 
 def get_player_round_matches(year: int, round_number: int, player_id) -> pd.DataFrame:
     round_matches = get_matches_for_year_and_round(year, round_number)
@@ -389,145 +446,264 @@ def get_player_round_matches(year: int, round_number: int, player_id) -> pd.Data
 
     return player_matches[["match_date", "opponent_name", "result", "score"]]
 
+def render_player_details(year: int, round_number: int, player_id, player_name: str) -> None:
+    st.markdown(f"### {player_name}")
 
-# ---------------------------------------------------
-# Load matches for selector building
-# ---------------------------------------------------
+    # Season Elo history
+    st.markdown("#### Season Match History + Elo Movement")
+    season_history_df = get_player_season_match_history(year, player_id)
 
-DEFAULT_YEAR, DEFAULT_ROUND = get_default_year_and_round()
+    if season_history_df.empty:
+        st.caption("No completed match history found for this player in the selected year.")
+        return
 
-matches_df = pd.DataFrame(get_matches()) if get_matches() else pd.DataFrame()
+    display_history = season_history_df.copy()
 
-if not matches_df.empty:
+    display_history["match_date"] = pd.to_datetime(
+        display_history["match_date"], errors="coerce"
+)
+
+    display_history = display_history.sort_values(
+        ["match_date"],
+        ascending=False
+    ).reset_index(drop=True)
+
+    display_history["Date"] = display_history["match_date"].dt.strftime("%Y-%m-%d")
+    display_history["Elo After"] = pd.to_numeric(
+        display_history["elo"], errors="coerce"
+    ).round(1)
+    display_history["Elo +/-"] = pd.to_numeric(
+        display_history["elo_change"], errors="coerce"
+    ).round(1)
+
+    st.dataframe(
+        display_history[
+            ["Date", "opponent_name", "result", "score", "Elo +/-", "Elo After"]
+        ].rename(
+            columns={
+                "opponent_name": "Opponent",
+                "result": "Result",
+                "score": "Score",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Date": st.column_config.TextColumn("Date", width="small"),
+            "Opponent": st.column_config.TextColumn("Opponent", width="large"),
+            "Result": st.column_config.TextColumn("Result", width="small"),
+            "Score": st.column_config.TextColumn("Score", width="medium"),
+            "Elo +/-": st.column_config.NumberColumn("Elo +/-", format="%.1f", width="small"),
+            "Elo After": st.column_config.NumberColumn("Elo After", format="%.1f", width="small"),
+        },
+    )
+
+    st.markdown("#### Elo Over Time")
+    chart_df = season_history_df.copy()
+    chart_df = chart_df.dropna(subset=["match_date", "elo"])
+    chart_df = chart_df.sort_values("match_date")
+
+    if not chart_df.empty:
+        chart_df = chart_df[["match_date", "elo"]].rename(
+            columns={"match_date": "Date", "elo": "Elo"}
+        )
+        chart_df = chart_df.set_index("Date")
+        st.line_chart(chart_df)
+
+def get_player_season_match_history(year: int, player_id) -> pd.DataFrame:
+    """
+    Returns season-long match history for one player, including:
+    - date
+    - opponent
+    - result
+    - score
+    - Elo after match
+    - Elo change from match
+    """
+    season_start_date = get_season_start_date(year)
+
+    elo_history_df = get_elo_time_series(
+        year=year,
+        season_start_date=season_start_date,
+    )
+
+    if elo_history_df is None or elo_history_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_date",
+                "opponent_name",
+                "result",
+                "score",
+                "elo",
+                "elo_change",
+            ]
+        )
+
+    elo_history_df = elo_history_df.copy()
+    elo_history_df = elo_history_df[elo_history_df["player_id"] == player_id].copy()
+
+    if elo_history_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_date",
+                "opponent_name",
+                "result",
+                "score",
+                "elo",
+                "elo_change",
+            ]
+        )
+
+    all_matches = get_matches_for_year(year)
+    matches_df = pd.DataFrame(all_matches) if all_matches else pd.DataFrame()
+
+    if matches_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_date",
+                "opponent_name",
+                "result",
+                "score",
+                "elo",
+                "elo_change",
+            ]
+        )
+
+    all_players = get_players()
+    players_df = pd.DataFrame(all_players) if all_players else pd.DataFrame()
+    name_map = {}
+    if (
+        not players_df.empty
+        and "player_id" in players_df.columns
+        and "name" in players_df.columns
+    ):
+        name_map = dict(zip(players_df["player_id"], players_df["name"]))
+
+    matches_df = matches_df.copy()
     matches_df["match_date"] = pd.to_datetime(matches_df["match_date"], errors="coerce")
-    matches_df = matches_df.dropna(subset=["match_date", "round"])
-    matches_df["year"] = matches_df["match_date"].dt.year
-    matches_df["round"] = pd.to_numeric(matches_df["round"], errors="coerce")
-    matches_df = matches_df.dropna(subset=["round"])
-    matches_df["round"] = matches_df["round"].astype(int)
 
-year_options = get_year_options(matches_df, DEFAULT_YEAR)
+    player_matches = matches_df[
+        (matches_df["player_id"] == player_id) | (matches_df["opponent_id"] == player_id)
+    ].copy()
 
-if "selected_year" not in st.session_state:
-    st.session_state["selected_year"] = DEFAULT_YEAR
+    if player_matches.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_date",
+                "opponent_name",
+                "result",
+                "score",
+                "elo",
+                "elo_change",
+            ]
+        )
 
-if "selected_round" not in st.session_state:
-    st.session_state["selected_round"] = DEFAULT_ROUND
+    def opponent_for_row(row):
+        return row["opponent_id"] if row["player_id"] == player_id else row["player_id"]
 
-if st.session_state["selected_year"] not in year_options:
-    st.session_state["selected_year"] = DEFAULT_YEAR
+    def result_for_row(row):
+        if row["winner_id"] == player_id:
+            return "W"
+        if pd.isna(row["winner_id"]):
+            return "-"
+        return "L"
 
-round_options = get_round_options_for_year(
-    matches_df=matches_df,
-    selected_year=st.session_state["selected_year"],
-    default_round=DEFAULT_ROUND,
-)
+    def score_for_match(row):
+        sets = get_sets(row["match_id"])
+        sets_df = pd.DataFrame(sets) if sets else pd.DataFrame()
 
-if st.session_state["selected_round"] not in round_options:
-    st.session_state["selected_round"] = DEFAULT_ROUND
+        if sets_df.empty:
+            return ""
 
+        sets_df["set_number"] = pd.to_numeric(sets_df["set_number"], errors="coerce")
+        sets_df["player_games"] = pd.to_numeric(sets_df["player_games"], errors="coerce")
+        sets_df["opponent_games"] = pd.to_numeric(sets_df["opponent_games"], errors="coerce")
+        sets_df = sets_df.dropna(subset=["set_number", "player_games", "opponent_games"])
+        sets_df = sets_df.sort_values("set_number")
 
-# ---------------------------------------------------
-# Selectors
-# ---------------------------------------------------
+        score_parts = []
 
-col1, col2 = st.columns([1, 1])
+        for _, set_row in sets_df.iterrows():
+            if row["player_id"] == player_id:
+                my_games = int(set_row["player_games"])
+                opp_games = int(set_row["opponent_games"])
+            else:
+                my_games = int(set_row["opponent_games"])
+                opp_games = int(set_row["player_games"])
 
-with col1:
-    selected_year = st.selectbox(
-        "Year",
-        options=year_options,
-        key="selected_year",
+            score_parts.append(f"{my_games}-{opp_games}")
+
+        return ", ".join(score_parts)
+
+    player_matches["opponent_id_display"] = player_matches.apply(opponent_for_row, axis=1)
+    player_matches["opponent_name"] = player_matches["opponent_id_display"].map(name_map)
+    player_matches["opponent_name"] = player_matches["opponent_name"].fillna(
+        player_matches["opponent_id_display"].astype(str)
+    )
+    player_matches["result"] = player_matches.apply(result_for_row, axis=1)
+    player_matches["score"] = player_matches.apply(score_for_match, axis=1)
+
+    player_matches = player_matches[
+        ["match_id", "match_date", "opponent_name", "result", "score"]
+    ].copy()
+
+    history_df = elo_history_df.merge(
+        player_matches,
+        on="match_id",
+        how="left",
     )
 
-round_options = get_round_options_for_year(
-    matches_df=matches_df,
-    selected_year=selected_year,
-    default_round=DEFAULT_ROUND if selected_year == DEFAULT_YEAR else 1,
-)
+    history_df["match_date"] = pd.to_datetime(history_df["date"], errors="coerce")
+    history_df["elo"] = pd.to_numeric(history_df["elo"], errors="coerce")
+    history_df["elo_change"] = pd.to_numeric(history_df["elo_change"], errors="coerce")
 
-if st.session_state["selected_round"] not in round_options:
-    st.session_state["selected_round"] = round_options[-1]
+    history_df = history_df.sort_values(["match_date", "match_id"]).reset_index(drop=True)
 
-with col2:
-    selected_round = st.selectbox(
-        "Round",
-        options=round_options,
-        key="selected_round",
-    )
-
+    return history_df[
+        ["match_date", "opponent_name", "result", "score", "elo", "elo_change"]
+    ]
 
 # ---------------------------------------------------
 # Main ladder data
 # ---------------------------------------------------
 
-stats_df = build_player_stats(selected_year, selected_round)
+year_options = [2026, 2025]
+
+if "selected_year" not in st.session_state:
+    st.session_state["selected_year"] = 2026
+
+selected_year = st.selectbox(
+    "Year",
+    options=year_options,
+    key="selected_year",
+)
+
+current_round = get_default_round_for_year(selected_year)
+
+stats_df = build_player_stats(selected_year, current_round)
 
 if stats_df.empty:
     st.info("No active players found.")
     st.stop()
 
-display_df, using_snapshot = load_display_ladder(selected_year, selected_round)
-
-status_text = "Frozen round order" if using_snapshot else "Live ladder preview"
+display_df, status_text = load_display_ladder(selected_year, current_round)
 st.caption(status_text)
 
-
-# ---------------------------------------------------
-# Admin controls
-# ---------------------------------------------------
-
-with st.expander("Admin: Round Controls"):
-    password_input = st.text_input("Password", type="password")
-
-    admin_col1, admin_col2 = st.columns(2)
-
-    with admin_col1:
-        if st.button("End Round", type="primary"):
-            admin_password = st.secrets.get("ADMIN_PASSWORD")
-
-            if not admin_password:
-                st.error("ADMIN_PASSWORD is not set in Streamlit secrets.")
-            elif password_input != admin_password:
-                st.error("Incorrect password.")
-            else:
-                final_rank_df = compute_live_ranking(stats_df)
-                save_snapshot(selected_year, selected_round, final_rank_df)
-                st.success(f"Round {selected_round} for {selected_year} has been closed.")
-                st.rerun()
-
-    with admin_col2:
-        if st.button("Begin New Round"):
-            admin_password = st.secrets.get("ADMIN_PASSWORD")
-
-            if not admin_password:
-                st.error("ADMIN_PASSWORD is not set in Streamlit secrets.")
-            elif password_input != admin_password:
-                st.error("Incorrect password.")
-            else:
-                try:
-                    # Optional guard: require current round snapshot to exist first
-                    existing_current_snapshot = get_ladder_snapshot(selected_year, selected_round)
-                    if not existing_current_snapshot:
-                        st.error(
-                            f"Please close round {selected_round} first before beginning round {selected_round + 1}."
-                        )
-                    else:
-                        begin_new_round(selected_year, selected_round)
-                        st.session_state["selected_year"] = selected_year
-                        st.session_state["selected_round"] = selected_round + 1
-                        st.success(f"Round {selected_round + 1} has started.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(str(e))
+selected_round_window = get_round_window(selected_year, current_round)
+if selected_year == 2026 and selected_round_window:
+    st.caption(
+        f"Current round: Round {current_round} ({selected_round_window['start_date']} to {selected_round_window['end_date']})"
+    )
+elif selected_year == 2025:
+    st.caption("Showing 2025 ladder.")
 
 
 # ---------------------------------------------------
 # Render ladder
 # ---------------------------------------------------
 
-st.subheader(f"{selected_year} Ladder — Round {selected_round}")
-st.caption("Select a player row to view their matches for this round.")
+st.subheader(f"{selected_year} Ladder")
+st.caption("Select a player row to view their matches for the current round.")
 
 st.markdown(
     """
@@ -613,51 +789,3 @@ event = st.dataframe(
         "Elo": st.column_config.NumberColumn("Elo", format="%.1f", width="small"),
     },
 )
-
-selected_rows = event.selection.rows if event and event.selection else []
-
-if selected_rows:
-    selected_idx = selected_rows[0]
-    selected_row = interactive_table.iloc[selected_idx]
-
-    if pd.notna(selected_row["player_id"]):
-        selected_player_id = selected_row["player_id"]
-        selected_player_name = selected_row["Player"]
-
-        st.markdown(f"### {selected_player_name} — Round {selected_round} Matches")
-
-        player_round_matches_df = get_player_round_matches(
-            selected_year,
-            selected_round,
-            selected_player_id,
-        )
-
-        if player_round_matches_df.empty:
-            st.caption("No matches found for this player in the selected round.")
-        else:
-            player_round_matches_df = player_round_matches_df.copy()
-            player_round_matches_df["match_date"] = pd.to_datetime(
-                player_round_matches_df["match_date"], errors="coerce"
-            )
-            player_round_matches_df["Date"] = player_round_matches_df["match_date"].dt.strftime(
-                "%Y-%m-%d"
-            )
-            player_round_matches_df = player_round_matches_df.rename(
-                columns={
-                    "opponent_name": "Opponent",
-                    "result": "Result",
-                    "score": "Score",
-                }
-            )
-
-            st.dataframe(
-                player_round_matches_df[["Date", "Opponent", "Result", "Score"]],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Date": st.column_config.TextColumn("Date", width="small"),
-                    "Opponent": st.column_config.TextColumn("Opponent", width="large"),
-                    "Result": st.column_config.TextColumn("Result", width="small"),
-                    "Score": st.column_config.TextColumn("Score", width="medium"),
-                },
-            )
