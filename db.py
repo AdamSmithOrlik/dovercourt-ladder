@@ -1,7 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-
+from datetime import date
 
 @st.cache_resource
 def get_supabase() -> Client:
@@ -27,13 +27,44 @@ def insert_player(player_data: dict):
     response = supabase.table("players").insert(player_data).execute()
     return response.data
 
-
-def update_player_active_status(email: str, active: bool):
+def get_current_player_statuses():
     supabase = get_supabase()
+
     response = (
+        supabase.table("current_player_status")
+        .select("*")
+        .order("name")
+        .execute()
+    )
+
+    return response.data
+
+def update_player_active_status(
+    email: str,
+    active: bool,
+    effective_date: str | None = None,
+    end_date: str | None = None,
+):
+    supabase = get_supabase()
+
+    player_resp = (
         supabase.table("players")
-        .update({"active": active})
+        .select("player_id")
         .eq("email", email)
+        .single()
+        .execute()
+    )
+
+    player_id = player_resp.data["player_id"]
+
+    response = (
+        supabase.table("player_status_changes")
+        .insert({
+            "player_id": player_id,
+            "active": active,
+            "effective_date": effective_date or date.today().isoformat(),
+            "end_date": end_date,
+        })
         .execute()
     )
     return response.data
@@ -41,9 +72,10 @@ def update_player_active_status(email: str, active: bool):
 def get_active_players():
     supabase = get_supabase()
     response = (
-        supabase.table("players")
+        supabase.table("current_player_status")
         .select("*")
         .eq("active", True)
+        .order("name")
         .execute()
     )
     return response.data
@@ -209,40 +241,6 @@ def get_matches_for_year_and_round(year: int, round_number: int):
     )
     return response.data
 
-
-def get_ladder_snapshot(year: int, round_number: int):
-    supabase = get_supabase()
-    response = (
-        supabase.table("ladder_snapshots")
-        .select("*")
-        .eq("year", year)
-        .eq("round", round_number)
-        .order("rank")
-        .execute()
-    )
-    return response.data
-
-
-def delete_ladder_snapshot(year: int, round_number: int):
-    supabase = get_supabase()
-    response = (
-        supabase.table("ladder_snapshots")
-        .delete()
-        .eq("year", year)
-        .eq("round", round_number)
-        .execute()
-    )
-    return response.data
-
-
-def insert_ladder_snapshot(rows: list[dict]):
-    if not rows:
-        return []
-
-    supabase = get_supabase()
-    response = supabase.table("ladder_snapshots").insert(rows).execute()
-    return response.data
-
 def get_latest_match_year_and_round():
     """
     Returns:
@@ -278,3 +276,85 @@ def get_latest_match_year_and_round():
         latest_round = None
 
     return latest_year, latest_round
+
+def add_initial_player_status_for_next_round(email: str):
+    supabase = get_supabase()
+
+    clean_email = email.strip().lower()
+
+    player_resp = (
+        supabase.table("players")
+        .select("player_id")
+        .eq("email", clean_email)
+        .single()
+        .execute()
+    )
+
+    if not player_resp.data:
+        raise ValueError(f"No player found for email: {clean_email}")
+
+    player_id = player_resp.data["player_id"]
+
+    today = date.today()
+
+    next_round = next(
+        (r for r in ROUND_WINDOWS_2026 if r["start_date"] > today),
+        None
+    )
+
+    if next_round is None:
+        raise ValueError("No upcoming round start date found.")
+
+    status_resp = (
+        supabase.table("player_status_changes")
+        .insert({
+            "player_id": player_id,
+            "active": True,
+            "effective_date": next_round["start_date"].isoformat(),
+            "end_date": None,
+        })
+        .execute()
+    )
+
+    return status_resp.data
+
+def get_upcoming_player_status_changes():
+    supabase = get_supabase()
+    today = date.today().isoformat()
+
+    response = (
+        supabase.table("player_status_changes")
+        .select("""
+            id,
+            player_id,
+            active,
+            effective_date,
+            end_date,
+            created_at,
+            players (
+                name,
+                email
+            )
+        """)
+        .gt("effective_date", today)
+        .order("effective_date")
+        .execute()
+    )
+
+    data = response.data or []
+
+    formatted = []
+    for row in data:
+        player = row.get("players") or {}
+
+        formatted.append({
+            "player_id": row["player_id"],
+            "name": player.get("name"),
+            "email": player.get("email"),
+            "active": row["active"],
+            "effective_date": row["effective_date"],
+            "end_date": row["end_date"],
+            "created_at": row["created_at"],
+        })
+
+    return formatted
