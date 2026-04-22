@@ -1,10 +1,4 @@
-import streamlit as st
-import pandas as pd
-
 from datetime import date, timedelta
-
-st.set_page_config(page_title="Ladder", layout="wide")
-st.title("Ladder")
 
 BOX_SIZE = 5
 

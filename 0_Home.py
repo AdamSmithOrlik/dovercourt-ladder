@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
 from db import (
     get_players,
@@ -9,15 +10,19 @@ from db import (
     insert_sets,
     insert_player,
     update_player_active_status,
+    get_current_player_statuses,
     update_match,
-    update_set
+    update_set,
+    add_initial_player_status_for_next_round,
 )
 
-from utils.rankings import compute_rankings
 from utils.constants import MATCH_TYPES
 from utils.score_parser import parse_score_flexible
 
-from utils.rounds import get_current_round_from_date
+from utils.rounds import get_current_round_from_date, ROUND_WINDOWS_2026
+
+players = get_players()
+current_statuses = get_current_player_statuses()
 
 st.set_page_config(page_title="Dovercourt Ladder", layout="wide")
 
@@ -35,7 +40,6 @@ if "active_page" not in st.session_state:
 # DATA
 # -----------------------------------------------------
 
-players = get_players()
 matches = get_matches()
 
 players_df = pd.DataFrame(players)
@@ -150,88 +154,9 @@ if st.session_state.active_page is None:
         st.info("No activity yet.")
 
 
-# -----------------------------------------------------
+# -----------------------------
 # SUBMIT MATCH
-# -----------------------------------------------------
-
-elif st.session_state.active_page == "submit":
-
-    st.header("Submit Match")
-
-    if not players:
-        st.error("No players found.")
-        st.stop()
-
-    player_options = {p["name"]: p["player_id"] for p in players}
-
-    # -----------------------------
-    # PLAYER SELECTION (outside form)
-    # -----------------------------
-
-    player_name = st.selectbox(
-        "Player",
-        list(player_options.keys()),
-        key="submit_player"
-    )
-
-    opponent_name = st.selectbox(
-        "Opponent",
-        list(player_options.keys()),
-        key="submit_opponent"
-    )
-
-    score_text = st.text_input(
-        "Score",
-        placeholder="Examples: 6-4 4-6 10-8 | 8-6"
-    )
-
-    parsed_preview = parse_score_flexible(score_text)
-
-    suggested_winner = None
-
-    if parsed_preview:
-
-        parsed_sets, p_sets, o_sets = parsed_preview
-
-        preview = ", ".join(
-            f"{s['player_games']}-{s['opponent_games']}"
-            for s in parsed_sets
-        )
-
-        st.caption(f"Parsed sets: {preview}")
-
-        if p_sets > o_sets:
-            suggested_winner = player_name
-        elif o_sets > p_sets:
-            suggested_winner = opponent_name
-
-    st.subheader("Confirm Winner")
-
-    winner_name = st.radio(
-        "Winner",
-        options=[player_name, opponent_name],
-        index=0 if suggested_winner != opponent_name else 1,
-        horizontal=True
-    )
-
-    # -----------------------------
-    # FORM (only for submission)
-    # -----------------------------
-
-    with st.form("match_form"):
-
-        match_type = st.selectbox(
-            "Match Type",
-            MATCH_TYPES
-        )
-
-        match_date = st.date_input("Match Date")
-
-        submitted = st.form_submit_button("Submit Match")
-
-    # -----------------------------
-    # SUBMIT
-    # -----------------------------
+# -----------------------------
 
 elif st.session_state.active_page == "submit":
 
@@ -379,29 +304,46 @@ elif st.session_state.active_page == "signup":
         submitted = st.form_submit_button("Sign Up")
 
     if submitted:
+        clean_name = name.strip()
+        clean_email = email.strip().lower()
 
-        player_data = {
-            "name": name.strip(),
-            "email": email.strip().lower(),
-            "active": True
-        }
+        if not clean_name or not clean_email:
+            st.error("Name and email are required.")
+        else:
+            try:
+                player_data = {
+                    "name": clean_name,
+                    "email": clean_email,
+                }
 
-        insert_player(player_data)
+                insert_player(player_data)
+                add_initial_player_status_for_next_round(clean_email)
 
-        st.success("Player added.")
-        st.session_state.active_page = None
-        st.rerun()
+                st.success("Player added.")
+                st.session_state.active_page = None
+                st.rerun()
 
+            except Exception as e:
+                st.error(f"Could not add player: {e}")
 
 # -----------------------------------------------------
 # UPDATE STATUS
 # -----------------------------------------------------
 
+
+
 elif st.session_state.active_page == "status":
 
     st.header("Update Player Status")
 
+    # Full roster: anyone can be selected
     player_options = {p["name"]: p for p in players}
+
+    # Current effective statuses for toggle defaults
+    status_by_player_id = {
+        s["player_id"]: s
+        for s in current_statuses
+    }
 
     player_name = st.selectbox(
         "Search Player",
@@ -409,23 +351,100 @@ elif st.session_state.active_page == "status":
     )
 
     player = player_options[player_name]
+    current_status_row = status_by_player_id.get(player["player_id"])
+
+    # Fallback default if no effective status row exists yet
+    current_active = (
+        current_status_row["active"]
+        if current_status_row is not None
+        else True
+    )
 
     new_status = st.toggle(
         "Active",
-        value=player["active"]
+        value=current_active
+    )
+
+    def format_round_option(round_info: dict) -> str:
+        return (
+            f"Round {round_info['round']} "
+            f"({round_info['start_date'].strftime('%b %d, %Y')} - "
+            f"{round_info['end_date'].strftime('%b %d, %Y')})"
+        )
+
+    round_options = {
+        format_round_option(r): r
+        for r in ROUND_WINDOWS_2026
+    }
+
+    current_year, current_round = get_current_round_from_date()
+    if current_year == 2026 and current_round is not None:
+        default_start_idx = next(
+            (
+                i for i, r in enumerate(ROUND_WINDOWS_2026)
+                if r["round"] == current_round
+            ),
+            0
+        )
+    else:
+        default_start_idx = 0
+
+    start_round_label = st.selectbox(
+        "Effective Starting Round",
+        options=list(round_options.keys()),
+        index=default_start_idx,
+    )
+
+    start_round = round_options[start_round_label]
+    effective_date = start_round["start_date"].isoformat()
+
+    eligible_end_rounds = [
+        r for r in ROUND_WINDOWS_2026
+        if r["start_date"] >= start_round["start_date"]
+    ]
+
+    end_round_options = {"No end date": None}
+    end_round_options.update({
+        format_round_option(r): r
+        for r in eligible_end_rounds
+    })
+
+    end_round_label = st.selectbox(
+        "End After Round",
+        options=list(end_round_options.keys()),
+        index=0,
+        help="Choose the round after which this status should stop applying. Leave as 'No end date' for an ongoing status."
+    )
+
+    selected_end_round = end_round_options[end_round_label]
+    end_date = (
+        selected_end_round["end_date"].isoformat()
+        if selected_end_round is not None
+        else None
     )
 
     if st.button("Update Status", use_container_width=True):
 
         update_player_active_status(
             player["email"],
-            new_status
+            new_status,
+            effective_date=effective_date,
+            end_date=end_date,
         )
 
-        st.success("Status updated.")
+        status_text = "active" if new_status else "inactive"
+
+        if end_date:
+            st.success(
+                f"Scheduled {player_name} as {status_text} from {effective_date} to {end_date}."
+            )
+        else:
+            st.success(
+                f"Scheduled {player_name} as {status_text} starting {effective_date}."
+            )
+
         st.session_state.active_page = None
         st.rerun()
-
 
 # -----------------------------------------------------
 # EDIT MATCH
