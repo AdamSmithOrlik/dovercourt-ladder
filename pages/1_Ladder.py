@@ -12,7 +12,6 @@ from db import (
 from utils.elo import get_latest_elo_standings, get_elo_time_series
 from utils.rounds import (
     get_round_window,
-    get_current_round_from_date,
     get_last_completed_round_from_date,
     get_default_round_for_year,
     get_season_start_date,
@@ -23,7 +22,7 @@ st.set_page_config(page_title="Ladder", layout="wide")
 st.title("Ladder")
 
 BOX_SIZE = 5
-BOX_SIZE = 5
+
 
 # ---------------------------------------------------
 # Box helpers
@@ -362,21 +361,22 @@ def load_display_ladder(year: int, current_round: int) -> tuple[pd.DataFrame, st
 
 
 # ---------------------------------------------------
-# Match detail helper
+# Match detail helpers
 # ---------------------------------------------------
 
-def get_player_round_matches(year: int, round_number: int, player_id) -> pd.DataFrame:
-    round_matches = get_matches_for_year_and_round(year, round_number)
-    round_matches_df = pd.DataFrame(round_matches) if round_matches else pd.DataFrame()
+def get_player_recent_matches(player_id, year: int, limit: int = 3) -> pd.DataFrame:
+    """Return the player's most recent matches for the selected year."""
+    all_matches = get_matches_for_year(year)
+    matches_df = pd.DataFrame(all_matches) if all_matches else pd.DataFrame()
 
-    if round_matches_df.empty:
+    if matches_df.empty:
         return pd.DataFrame(
             columns=["match_date", "opponent_name", "result", "score"]
         )
 
-    player_matches = round_matches_df[
-        (round_matches_df["player_id"] == player_id)
-        | (round_matches_df["opponent_id"] == player_id)
+    player_matches = matches_df[
+        (matches_df["player_id"] == player_id)
+        | (matches_df["opponent_id"] == player_id)
     ].copy()
 
     if player_matches.empty:
@@ -386,6 +386,7 @@ def get_player_round_matches(year: int, round_number: int, player_id) -> pd.Data
 
     all_players = get_players()
     players_df = pd.DataFrame(all_players) if all_players else pd.DataFrame()
+
     name_map = {}
     if (
         not players_df.empty
@@ -414,8 +415,10 @@ def get_player_round_matches(year: int, round_number: int, player_id) -> pd.Data
         sets_df["set_number"] = pd.to_numeric(sets_df["set_number"], errors="coerce")
         sets_df["player_games"] = pd.to_numeric(sets_df["player_games"], errors="coerce")
         sets_df["opponent_games"] = pd.to_numeric(sets_df["opponent_games"], errors="coerce")
-        sets_df = sets_df.dropna(subset=["set_number", "player_games", "opponent_games"])
-        sets_df = sets_df.sort_values("set_number")
+
+        sets_df = sets_df.dropna(
+            subset=["set_number", "player_games", "opponent_games"]
+        ).sort_values("set_number")
 
         score_parts = []
 
@@ -434,81 +437,23 @@ def get_player_round_matches(year: int, round_number: int, player_id) -> pd.Data
     player_matches["match_date"] = pd.to_datetime(
         player_matches["match_date"], errors="coerce"
     )
+
+    player_matches = player_matches.sort_values(
+        ["match_date", "match_id"],
+        ascending=[False, False]
+    ).head(limit).copy()
+
     player_matches["opponent_id_display"] = player_matches.apply(opponent_for_row, axis=1)
     player_matches["opponent_name"] = player_matches["opponent_id_display"].map(name_map)
     player_matches["opponent_name"] = player_matches["opponent_name"].fillna(
         player_matches["opponent_id_display"].astype(str)
     )
+
     player_matches["result"] = player_matches.apply(result_for_row, axis=1)
     player_matches["score"] = player_matches.apply(score_for_match, axis=1)
 
-    player_matches = player_matches.sort_values(["match_date", "match_id"]).copy()
-
     return player_matches[["match_date", "opponent_name", "result", "score"]]
 
-def render_player_details(year: int, round_number: int, player_id, player_name: str) -> None:
-    st.markdown(f"### {player_name}")
-
-    # Season Elo history
-    st.markdown("#### Season Match History + Elo Movement")
-    season_history_df = get_player_season_match_history(year, player_id)
-
-    if season_history_df.empty:
-        st.caption("No completed match history found for this player in the selected year.")
-        return
-
-    display_history = season_history_df.copy()
-
-    display_history["match_date"] = pd.to_datetime(
-        display_history["match_date"], errors="coerce"
-)
-
-    display_history = display_history.sort_values(
-        ["match_date"],
-        ascending=False
-    ).reset_index(drop=True)
-
-    display_history["Date"] = display_history["match_date"].dt.strftime("%Y-%m-%d")
-    display_history["Elo After"] = pd.to_numeric(
-        display_history["elo"], errors="coerce"
-    ).round(1)
-    display_history["Elo +/-"] = pd.to_numeric(
-        display_history["elo_change"], errors="coerce"
-    ).round(1)
-
-    st.dataframe(
-        display_history[
-            ["Date", "opponent_name", "result", "score", "Elo +/-", "Elo After"]
-        ].rename(
-            columns={
-                "opponent_name": "Opponent",
-                "result": "Result",
-                "score": "Score",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Date": st.column_config.TextColumn("Date", width="small"),
-            "Opponent": st.column_config.TextColumn("Opponent", width="large"),
-            "Result": st.column_config.TextColumn("Result", width="small"),
-            "Score": st.column_config.TextColumn("Score", width="medium"),
-            "Elo +/-": st.column_config.NumberColumn("Elo +/-", format="%.1f", width="small"),
-            "Elo After": st.column_config.NumberColumn("Elo After", format="%.1f", width="small"),
-        },
-    )
-
-    st.markdown("#### Elo Over Time")
-    chart_df = season_history_df.copy()
-    chart_df = chart_df.dropna(subset=["match_date", "elo"])
-    chart_df = chart_df.sort_values("match_date")
-
-    if not chart_df.empty:
-        chart_df = chart_df[["match_date", "elo"]].rename(
-            columns={"match_date": "Date", "elo": "Elo"}
-        )
-        chart_df = chart_df.set_index("Date")
-        st.line_chart(chart_df)
 
 def get_player_season_match_history(year: int, player_id) -> pd.DataFrame:
     """
@@ -663,6 +608,72 @@ def get_player_season_match_history(year: int, player_id) -> pd.DataFrame:
         ["match_date", "opponent_name", "result", "score", "elo", "elo_change"]
     ]
 
+
+def render_player_details(year: int, player_id, player_name: str) -> None:
+    st.markdown(f"### {player_name}")
+
+    # Season Elo history
+    st.markdown("#### Season Match History + Elo Movement")
+    season_history_df = get_player_season_match_history(year, player_id)
+
+    if season_history_df.empty:
+        st.caption("No completed match history found for this player in the selected year.")
+        return
+
+    display_history = season_history_df.copy()
+
+    display_history["match_date"] = pd.to_datetime(
+        display_history["match_date"], errors="coerce"
+    )
+
+    display_history = display_history.sort_values(
+        ["match_date"],
+        ascending=False,
+    ).reset_index(drop=True)
+
+    display_history["Date"] = display_history["match_date"].dt.strftime("%Y-%m-%d")
+    display_history["Elo After"] = pd.to_numeric(
+        display_history["elo"], errors="coerce"
+    ).round(1)
+    display_history["Elo +/-"] = pd.to_numeric(
+        display_history["elo_change"], errors="coerce"
+    ).round(1)
+
+    st.dataframe(
+        display_history[
+            ["Date", "opponent_name", "result", "score", "Elo +/-", "Elo After"]
+        ].rename(
+            columns={
+                "opponent_name": "Opponent",
+                "result": "Result",
+                "score": "Score",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Date": st.column_config.TextColumn("Date", width="small"),
+            "Opponent": st.column_config.TextColumn("Opponent", width="large"),
+            "Result": st.column_config.TextColumn("Result", width="small"),
+            "Score": st.column_config.TextColumn("Score", width="medium"),
+            "Elo +/-": st.column_config.NumberColumn("Elo +/-", format="%.1f", width="small"),
+            "Elo After": st.column_config.NumberColumn("Elo After", format="%.1f", width="small"),
+        },
+    )
+
+    st.markdown("#### Elo Over Time")
+    chart_df = season_history_df.copy()
+    chart_df = chart_df.dropna(subset=["match_date", "elo"])
+    chart_df = chart_df.sort_values("match_date")
+
+    if not chart_df.empty:
+        chart_df = chart_df[["match_date", "elo"]].rename(
+            columns={"match_date": "Date", "elo": "Elo"}
+        )
+        chart_df = chart_df.set_index("Date")
+        st.line_chart(chart_df)
+
+
 # ---------------------------------------------------
 # Main ladder data
 # ---------------------------------------------------
@@ -703,7 +714,7 @@ elif selected_year == 2025:
 # ---------------------------------------------------
 
 st.subheader(f"{selected_year} Ladder")
-st.caption("Select a player row to view their matches for the current round.")
+st.caption("Select a player row to view their last 3 matches")
 
 st.markdown(
     """
@@ -750,7 +761,7 @@ display_table = display_table[
     ["player_id", "Box", "Rank", "Player", "Round Record", "Record", "Elo"]
 ].sort_values(["Box", "Rank"], ascending=[True, True]).reset_index(drop=True)
 
-# spacer rows between boxes
+# Spacer rows between boxes
 table_rows = []
 for idx, row in display_table.iterrows():
     if idx > 0:
@@ -773,14 +784,17 @@ for idx, row in display_table.iterrows():
 
 interactive_table = pd.DataFrame(table_rows)
 
-event = st.dataframe(
-    interactive_table[["Box", "Rank", "Player", "Round Record", "Record", "Elo"]],
-    use_container_width=True,
+interactive_table["Show"] = False
+
+edited_table = st.data_editor(
+    interactive_table[["Show", "Box", "Rank", "Player", "Round Record", "Record", "Elo"]],
+    width="stretch",
+    height=450,
     hide_index=True,
-    on_select="rerun",
-    selection_mode="single-row",
-    key="ladder_table",
+    key="ladder_table_editor",
+    disabled=["Box", "Rank", "Player", "Round Record", "Record", "Elo"],
     column_config={
+        "Show": st.column_config.CheckboxColumn("Show", width="small"),
         "Box": st.column_config.TextColumn("Box", width="small"),
         "Rank": st.column_config.TextColumn("Rank", width="small"),
         "Player": st.column_config.TextColumn("Player", width="large"),
@@ -789,3 +803,23 @@ event = st.dataframe(
         "Elo": st.column_config.NumberColumn("Elo", format="%.1f", width="small"),
     },
 )
+
+edited_table = edited_table.copy()
+edited_table["player_id"] = interactive_table["player_id"].values
+
+selected_rows = edited_table[
+    (edited_table["Show"] == True)
+    & (edited_table["player_id"].notna())
+]
+
+if not selected_rows.empty:
+    selected_row = selected_rows.iloc[0]
+
+    selected_player_id = selected_row["player_id"]
+    selected_player_name = selected_row["Player"]
+
+    render_player_details(
+        year=selected_year,
+        player_id=selected_player_id,
+        player_name=selected_player_name,
+    )

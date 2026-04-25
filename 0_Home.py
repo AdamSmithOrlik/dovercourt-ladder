@@ -309,8 +309,21 @@ elif st.session_state.active_page == "signup":
 
         if not clean_name or not clean_email:
             st.error("Name and email are required.")
+
         else:
             try:
+                players = get_players()
+
+                existing_names = {
+                    p["name"].strip().lower()
+                    for p in players
+                    if p.get("name")
+                }
+
+                if clean_name.lower() in existing_names:
+                    st.error("A player with this name already exists.")
+                    st.stop()
+
                 player_data = {
                     "name": clean_name,
                     "email": clean_email,
