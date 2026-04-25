@@ -2,6 +2,7 @@ import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
 from datetime import date
+from utils.rounds import ROUND_WINDOWS_2026
 
 @st.cache_resource
 def get_supabase() -> Client:
@@ -9,6 +10,11 @@ def get_supabase() -> Client:
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
+def get_supabase_admin():
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+    )
 
 def get_players():
     supabase = get_supabase()
@@ -23,7 +29,7 @@ def get_player_by_email(email: str):
 
 
 def insert_player(player_data: dict):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     response = supabase.table("players").insert(player_data).execute()
     return response.data
 
@@ -45,7 +51,7 @@ def update_player_active_status(
     effective_date: str | None = None,
     end_date: str | None = None,
 ):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
 
     player_resp = (
         supabase.table("players")
@@ -81,7 +87,7 @@ def get_active_players():
     return response.data
 
 def insert_match(match_data: dict):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     response = supabase.table("matches").insert(match_data).execute()
     return response.data[0]
 
@@ -189,13 +195,13 @@ def get_all_sets():
 
 
 def insert_sets(sets_data: list):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     response = supabase.table("sets").insert(sets_data).execute()
     return response.data
 
 
 def update_match(match_id: str, match_data: dict):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     response = (
         supabase.table("matches").update(match_data).eq("match_id", match_id).execute()
     )
@@ -203,7 +209,7 @@ def update_match(match_id: str, match_data: dict):
 
 
 def update_set(set_id: str, set_data: dict):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     response = supabase.table("sets").update(set_data).eq("set_id", set_id).execute()
     return response.data
 
@@ -278,7 +284,7 @@ def get_latest_match_year_and_round():
     return latest_year, latest_round
 
 def add_initial_player_status_for_next_round(email: str):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
 
     clean_email = email.strip().lower()
 
@@ -336,7 +342,7 @@ def get_upcoming_player_status_changes():
                 email
             )
         """)
-        .gt("effective_date", today)
+        .gte("effective_date", today)
         .order("effective_date")
         .execute()
     )
