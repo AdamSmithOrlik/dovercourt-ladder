@@ -89,7 +89,7 @@ with st.expander("ELO System"):
         reflect not just who won, but how strongly they performed in that match.
 
         Elo is updated match by match in the order the matches were played. It is not a
-        permanent ranking of ability, but a season-long form rating that rewards winning,
+        permanent ranking of ability, but a season-long rating that rewards winning,
         strong performances, and good results against highly rated opponents.
         
         The main goal of Elo is to help create better skill-based matchups. Over time,
