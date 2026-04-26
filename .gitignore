@@ -1,4 +1,6 @@
 .venv/
 .streamlit/secrets.toml
+.streamlit/hold_secret.toml
+.codex
 __pycache__/
 *.pyc
