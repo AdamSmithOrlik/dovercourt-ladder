@@ -524,13 +524,16 @@ with top_col1:
         index=0,
     )
 
-player_lookup_df = get_players()
+players_list = get_players()
+player_lookup_df = pd.DataFrame(players_list)
+
+
 
 if player_lookup_df.empty:
     st.info("No active players found.")
     st.stop()
 
-player_options = player_lookup_df["player_name"].tolist()
+player_options = player_lookup_df["name"].tolist()
 
 with top_col2:
     selected_player_name = st.selectbox(
@@ -540,7 +543,7 @@ with top_col2:
     )
 
 selected_player_row = player_lookup_df[
-    player_lookup_df["player_name"] == selected_player_name
+    player_lookup_df["name"] == selected_player_name
 ].iloc[0]
 
 selected_player_id = selected_player_row["player_id"]
