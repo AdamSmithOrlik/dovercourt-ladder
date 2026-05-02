@@ -524,7 +524,7 @@ with top_col1:
         index=0,
     )
 
-player_lookup_df = get_active_player_lookup()
+player_lookup_df = get_players()
 
 if player_lookup_df.empty:
     st.info("No active players found.")

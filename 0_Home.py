@@ -14,6 +14,7 @@ from db import (
     update_match,
     update_set,
     add_initial_player_status_for_next_round,
+    send_match_edit_email
 )
 
 from utils.constants import MATCH_TYPES
@@ -320,8 +321,18 @@ elif st.session_state.active_page == "signup":
                     if p.get("name")
                 }
 
+                existing_emails = {
+                    p["email"].strip().lower()
+                    for p in players
+                    if p.get("email")
+                }
+
                 if clean_name.lower() in existing_names:
                     st.error("A player with this name already exists.")
+                    st.stop()
+
+                if clean_email in existing_emails:
+                    st.error("A player with this email already exists.")
                     st.stop()
 
                 player_data = {
@@ -481,7 +492,7 @@ elif st.session_state.active_page == "edit":
 
     match_options = {
         f"{player_name_map[m['winner_id']]} def. "
-        f"{player_name_map[m['opponent_id'] if m['winner_id']==m['player_id'] else m['player_id']]} "
+        f"{player_name_map[m['opponent_id'] if m['winner_id'] == m['player_id'] else m['player_id']]} "
         f"({m['match_date'][:10]})": m
         for _, m in matches_df.iterrows()
     }
@@ -530,6 +541,25 @@ elif st.session_state.active_page == "edit":
             value=pd.to_datetime(match["match_date"])
         )
 
+    winner_options = {
+        player_name: player_id,
+        opponent_name: opponent_id,
+    }
+
+    current_winner_name = player_name_map.get(match["winner_id"], player_name)
+
+    new_winner_name = st.selectbox(
+        "Winner",
+        options=list(winner_options.keys()),
+        index=(
+            list(winner_options.keys()).index(current_winner_name)
+            if current_winner_name in winner_options
+            else 0
+        ),
+    )
+
+    new_winner_id = winner_options[new_winner_name]
+
     # -------------------------------------------------
     # LOAD SETS
     # -------------------------------------------------
@@ -552,7 +582,7 @@ elif st.session_state.active_page == "edit":
 
         with col1:
             p_games = st.number_input(
-                f"Player Games (Set {s['set_number']})",
+                f"{player_name} Games (Set {s['set_number']})",
                 value=int(s["player_games"]),
                 min_value=0,
                 key=f"p_{s['set_id']}"
@@ -560,7 +590,7 @@ elif st.session_state.active_page == "edit":
 
         with col2:
             o_games = st.number_input(
-                f"Opponent Games (Set {s['set_number']})",
+                f"{opponent_name} Games (Set {s['set_number']})",
                 value=int(s["opponent_games"]),
                 min_value=0,
                 key=f"o_{s['set_id']}"
@@ -570,7 +600,7 @@ elif st.session_state.active_page == "edit":
             "set_id": s["set_id"],
             "player_games": p_games,
             "opponent_games": o_games,
-            "is_tiebreak": p_games >= 10 or o_games >= 10
+            "is_tiebreak": p_games >= 10 or o_games >= 10,
         })
 
     st.divider()
@@ -581,37 +611,64 @@ elif st.session_state.active_page == "edit":
 
     if st.button("Save Changes", use_container_width=True):
 
-        p_sets = 0
-        o_sets = 0
-
-        for s in updated_sets:
-
-            if s["player_games"] > s["opponent_games"]:
-                p_sets += 1
-            else:
-                o_sets += 1
-
-        winner_id = player_id if p_sets > o_sets else opponent_id
+        old_winner_name = player_name_map.get(match["winner_id"], "Unknown")
+        old_type = match["type"]
+        old_date = str(match["match_date"])[:10]
 
         update_match(
             match_id,
             {
                 "type": new_type,
                 "match_date": str(new_date),
-                "winner_id": winner_id
+                "winner_id": new_winner_id,
             }
         )
 
         for s in updated_sets:
-
             update_set(
                 s["set_id"],
                 {
                     "player_games": s["player_games"],
                     "opponent_games": s["opponent_games"],
-                    "is_tiebreak": s["is_tiebreak"]
+                    "is_tiebreak": s["is_tiebreak"],
                 }
             )
+
+        score_lines = [
+            f"Set {i + 1}: {player_name} {s['player_games']} - {s['opponent_games']} {opponent_name}"
+            for i, s in enumerate(updated_sets)
+        ]
+
+        email_body = f"""
+    A match was edited.
+
+    Match ID: {match_id}
+
+    Players:
+    - {player_name}
+    - {opponent_name}
+
+    Previous:
+    - Winner: {old_winner_name}
+    - Type: {old_type}
+    - Date: {old_date}
+
+    Updated:
+    - Winner: {new_winner_name}
+    - Type: {new_type}
+    - Date: {new_date}
+
+    Updated score:
+    {chr(10).join(score_lines)}
+    """
+
+        try:
+            send_match_edit_email(
+                subject=f"Match edited: {player_name} vs {opponent_name}",
+                body=email_body,
+            )
+        except Exception as e:
+            st.warning(f"Match updated, but email notification failed: {e}")
 
         st.success("Match updated successfully.")
 

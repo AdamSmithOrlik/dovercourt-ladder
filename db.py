@@ -1,8 +1,10 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 from utils.rounds import ROUND_WINDOWS_2026
+import smtplib
+from email.message import EmailMessage
 
 @st.cache_resource
 def get_supabase() -> Client:
@@ -343,17 +345,53 @@ def get_upcoming_player_status_changes():
             )
         """)
         .gte("effective_date", today)
+        .order("player_id")
         .order("effective_date")
+        .order("created_at", desc=True)
         .execute()
     )
 
     data = response.data or []
 
-    formatted = []
+    # -------------------------------------------------
+    # Keep only the most recent row for the same
+    # player + effective_date
+    # -------------------------------------------------
+
+    latest_by_player_date = {}
+
     for row in data:
+        key = (
+            row["player_id"],
+            row["effective_date"],
+        )
+
+        existing = latest_by_player_date.get(key)
+
+        if existing is None or row["created_at"] > existing["created_at"]:
+            latest_by_player_date[key] = row
+
+    deduped_rows = list(latest_by_player_date.values())
+
+    deduped_rows.sort(
+        key=lambda r: (
+            r["player_id"],
+            r["effective_date"],
+            r["created_at"],
+        )
+    )
+
+    # -------------------------------------------------
+    # Group consecutive status changes together
+    # Same player + same active status + touching dates
+    # -------------------------------------------------
+
+    grouped = []
+
+    for row in deduped_rows:
         player = row.get("players") or {}
 
-        formatted.append({
+        current = {
             "player_id": row["player_id"],
             "name": player.get("name"),
             "email": player.get("email"),
@@ -361,6 +399,53 @@ def get_upcoming_player_status_changes():
             "effective_date": row["effective_date"],
             "end_date": row["end_date"],
             "created_at": row["created_at"],
-        })
+        }
 
-    return formatted
+        if not grouped:
+            grouped.append(current)
+            continue
+
+        previous = grouped[-1]
+
+        same_player = previous["player_id"] == current["player_id"]
+        same_status = previous["active"] == current["active"]
+
+        previous_end = previous["end_date"]
+        current_start = current["effective_date"]
+
+        consecutive = False
+
+        if previous_end is not None:
+            previous_end_date = date.fromisoformat(previous_end)
+            current_start_date = date.fromisoformat(current_start)
+
+            consecutive = current_start_date <= previous_end_date + timedelta(days=1)
+
+        if same_player and same_status and consecutive:
+            previous["end_date"] = current["end_date"]
+            previous["created_at"] = max(previous["created_at"], current["created_at"])
+        else:
+            grouped.append(current)
+
+    grouped.sort(
+        key=lambda r: (
+            r["effective_date"],
+            r["name"] or "",
+        )
+    )
+
+    return grouped
+
+def send_match_edit_email(subject: str, body: str):
+    gmail_address = st.secrets["GMAIL_ADDRESS"]
+    gmail_app_password = st.secrets["GMAIL_APP_PASSWORD"]
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = gmail_address
+    msg["To"] = gmail_address
+    msg.set_content(body)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(gmail_address, gmail_app_password)
+        smtp.send_message(msg)
