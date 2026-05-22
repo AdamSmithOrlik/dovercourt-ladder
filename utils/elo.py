@@ -13,6 +13,7 @@ from db import (
 DEFAULT_INITIAL_RATING = 1500.0
 DEFAULT_K_BASE = 24.0
 DEFAULT_ALPHA = 1.0
+DEFAULT_WIN_ELO_CHANGE = 5.0
 DEFAULT_ELO_YEAR = 2025
 DEFAULT_SEASON_START_MONTH_DAY = "04-01"
 
@@ -72,6 +73,26 @@ def compute_margin_multiplier(
 
     game_diff = games_winner - games_loser
     return game_diff / total_games
+
+
+def is_default_win(set_rows: pd.DataFrame) -> bool:
+    """Return True when a 0-0 score is used to record a default win."""
+    if set_rows.empty:
+        return False
+
+    cleaned_sets = set_rows.copy()
+    cleaned_sets["player_games"] = pd.to_numeric(
+        cleaned_sets["player_games"], errors="coerce"
+    )
+    cleaned_sets["opponent_games"] = pd.to_numeric(
+        cleaned_sets["opponent_games"], errors="coerce"
+    )
+
+    default_set_rows = (
+        (cleaned_sets["player_games"] == 0)
+        & (cleaned_sets["opponent_games"] == 0)
+    )
+    return bool(default_set_rows.any())
 
 
 def _parse_match_date_series(match_date_series: pd.Series) -> pd.Series:
@@ -225,29 +246,39 @@ def compute_elo_for_matches(
         if match_sets is None or match_sets.empty:
             continue
 
-        margin_multiplier = compute_margin_multiplier(
-            set_rows=match_sets,
-            winner_id=winner_id,
-            player_id=player_id,
-            opponent_id=opponent_id,
-        )
-
-        if margin_multiplier is None:
-            continue
-
-        effective_k = float(k_base) * (1.0 + float(alpha) * margin_multiplier)
-
         pre_player_rating = ratings[player_id]
         pre_opponent_rating = ratings[opponent_id]
 
-        expected_player = expected_score(pre_player_rating, pre_opponent_rating)
-        expected_opponent = 1.0 - expected_player
+        if is_default_win(match_sets):
+            effective_k = DEFAULT_WIN_ELO_CHANGE
+            margin_multiplier = 0.0
+            player_delta = (
+                DEFAULT_WIN_ELO_CHANGE
+                if winner_id == player_id
+                else -DEFAULT_WIN_ELO_CHANGE
+            )
+            opponent_delta = -player_delta
+        else:
+            margin_multiplier = compute_margin_multiplier(
+                set_rows=match_sets,
+                winner_id=winner_id,
+                player_id=player_id,
+                opponent_id=opponent_id,
+            )
 
-        player_actual = 1.0 if winner_id == player_id else 0.0
-        opponent_actual = 1.0 - player_actual
+            if margin_multiplier is None:
+                continue
 
-        player_delta = effective_k * (player_actual - expected_player)
-        opponent_delta = effective_k * (opponent_actual - expected_opponent)
+            effective_k = float(k_base) * (1.0 + float(alpha) * margin_multiplier)
+
+            expected_player = expected_score(pre_player_rating, pre_opponent_rating)
+            expected_opponent = 1.0 - expected_player
+
+            player_actual = 1.0 if winner_id == player_id else 0.0
+            opponent_actual = 1.0 - player_actual
+
+            player_delta = effective_k * (player_actual - expected_player)
+            opponent_delta = effective_k * (opponent_actual - expected_opponent)
 
         ratings[player_id] = pre_player_rating + player_delta
         ratings[opponent_id] = pre_opponent_rating + opponent_delta
