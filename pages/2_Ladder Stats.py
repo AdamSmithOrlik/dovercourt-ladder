@@ -9,23 +9,14 @@ from db import (
     get_sets,
 )
 from utils.elo import get_elo_time_series
+from utils.rounds import get_season_start_date
 
 st.set_page_config(page_title="Player Details", layout="wide")
 st.title("Player Details")
 
-SEASON_START_DATES = {
-    2025: "2025-04-01",
-    2026: "2026-04-01",
-}
-
-
 # ---------------------------------------------------
 # Helpers
 # ---------------------------------------------------
-
-def get_season_start_date(year: int) -> str | None:
-    return SEASON_START_DATES.get(year)
-
 
 def get_active_player_lookup() -> pd.DataFrame:
     active_players = get_active_players()
@@ -524,8 +515,7 @@ with top_col1:
         index=0,
     )
 
-players_list = get_players()
-player_lookup_df = pd.DataFrame(players_list)
+player_lookup_df = get_active_player_lookup()
 
 
 
@@ -533,7 +523,7 @@ if player_lookup_df.empty:
     st.info("No active players found.")
     st.stop()
 
-player_options = player_lookup_df["name"].tolist()
+player_options = player_lookup_df["player_name"].tolist()
 
 with top_col2:
     selected_player_name = st.selectbox(
@@ -543,7 +533,7 @@ with top_col2:
     )
 
 selected_player_row = player_lookup_df[
-    player_lookup_df["name"] == selected_player_name
+    player_lookup_df["player_name"] == selected_player_name
 ].iloc[0]
 
 selected_player_id = selected_player_row["player_id"]
