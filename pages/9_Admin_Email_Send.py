@@ -4,13 +4,13 @@ import smtplib
 
 from email.message import EmailMessage
 
-from db import get_active_players
+from db import get_active_players, insert_ladder_box_snapshot
 from utils.elo import get_latest_elo_standings
+from utils.ladder import compute_live_ranking
+from utils.rounds import get_default_round_for_year
 
 st.set_page_config(page_title="Admin — Box Emails", layout="wide")
 st.title("Admin — Box Emails")
-
-BOX_SIZE = 5
 
 SEASON_START_DATES = {
     2025: "2025-04-01",
@@ -24,22 +24,6 @@ SEASON_START_DATES = {
 
 def get_season_start_date(year: int) -> str | None:
     return SEASON_START_DATES.get(year)
-
-
-def assign_boxes(df: pd.DataFrame, box_size: int = 5) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-
-    df = df.copy()
-    df["box"] = ((df["rank"] - 1) // box_size) + 1
-
-    last_box = int(df["box"].max())
-    last_box_count = int((df["box"] == last_box).sum())
-
-    if last_box > 1 and last_box_count < box_size:
-        df.loc[df["box"] == last_box, "box"] = last_box - 1
-
-    return df
 
 
 def get_active_player_lookup() -> pd.DataFrame:
@@ -57,10 +41,15 @@ def get_active_player_lookup() -> pd.DataFrame:
 
     if "email" not in players_df.columns:
         players_df["email"] = ""
+    
+    if "cell_phone" not in players_df.columns:
+        players_df["cell_phone"] = ""
 
-    players_df = players_df[["player_id", "name", "email"]].copy()
+    players_df = players_df[["player_id", "name", "email", "cell_phone"]].copy()
     players_df = players_df.rename(columns={"name": "player_name"})
     players_df["email"] = players_df["email"].fillna("").astype(str)
+    players_df["cell_phone"] = players_df["cell_phone"].fillna("").astype(str)
+   
 
     return players_df
 
@@ -94,13 +83,7 @@ def build_live_box_standings(year: int) -> pd.DataFrame:
 
     merged["elo"] = pd.to_numeric(merged["elo"], errors="coerce").fillna(1500.0)
 
-    merged = merged.sort_values(
-        ["elo", "player_name"],
-        ascending=[False, True],
-    ).reset_index(drop=True)
-
-    merged["rank"] = range(1, len(merged) + 1)
-    merged = assign_boxes(merged, BOX_SIZE)
+    merged = compute_live_ranking(merged)
 
     return merged
 
@@ -117,21 +100,30 @@ def build_box_members_text(box_df: pd.DataFrame) -> str:
     for _, row in box_df.sort_values("rank").iterrows():
         name = row["player_name"]
         email = row["email"]
-        elo = row["elo"]
+        cell = row["cell_phone"]
 
-        if email:
-            lines.append(f"{int(row['rank'])}. {name} — {email} — Elo {elo:.1f}")
+        if email and cell:
+            lines.append(f"{int(row['rank'])}. {name} — {email} | {cell}")
+        elif email:
+            lines.append(f"{int(row['rank'])}. {name} — {email}")
+        elif cell:
+            lines.append(f"{int(row['rank'])}. {name} — {cell}")
         else:
-            lines.append(f"{int(row['rank'])}. {name} — Elo {elo:.1f}")
+            lines.append(f"{int(row['rank'])}. {name}")
 
     return "\n".join(lines)
 
 
 def default_email_subject(year: int, box_number: int) -> str:
-    return f"{year} Tennis Ladder — Your Box {box_number}"
+    return f"{year} Dovercourt Ladder — Your Box {box_number}"
 
 
-def default_email_body(recipient_name: str, year: int, box_number: int, box_df: pd.DataFrame) -> str:
+def default_email_body(
+    recipient_name: str,
+    year: int,
+    box_number: int,
+    box_df: pd.DataFrame,
+) -> str:
     members_text = build_box_members_text(box_df)
 
     return f"""Hi {recipient_name},
@@ -180,6 +172,8 @@ with top_col1:
         index=0,
     )
 
+current_round = get_default_round_for_year(selected_year)
+
 standings_df = build_live_box_standings(selected_year)
 
 if standings_df.empty:
@@ -189,11 +183,14 @@ if standings_df.empty:
 with top_col2:
     selected_box_filter = st.selectbox(
         "Filter to box",
-        options=["All"] + sorted(standings_df["box"].dropna().astype(int).unique().tolist()),
+        options=["All"] + sorted(
+            standings_df["box"].dropna().astype(int).unique().tolist()
+        ),
         index=0,
     )
 
 display_df = standings_df.copy()
+
 if selected_box_filter != "All":
     display_df = display_df[display_df["box"] == int(selected_box_filter)].copy()
 
@@ -203,18 +200,57 @@ show_df = display_df.copy()
 show_df["elo"] = pd.to_numeric(show_df["elo"], errors="coerce").round(1)
 
 st.dataframe(
-    show_df[["box", "rank", "player_name", "email", "elo"]].rename(
+    show_df[["box", "rank", "player_name", "email", "cell_phone", "elo"]].rename(
         columns={
             "box": "Box",
             "rank": "Rank",
             "player_name": "Player",
             "email": "Email",
+            "cell_phone": "Number",
             "elo": "Elo",
         }
     ),
     use_container_width=True,
     hide_index=True,
 )
+
+# ---------------------------------------------------
+# Save ladder snapshot
+# ---------------------------------------------------
+
+st.markdown("---")
+st.subheader("Save Box Snapshot")
+
+st.caption(
+    f"This saves the current ladder box order to Supabase for "
+    f"{selected_year}, Round {current_round}."
+)
+
+if st.button("Save Current Ladder as Box Snapshot"):
+    snapshot_df = standings_df.copy()
+    snapshot_df = snapshot_df.sort_values(["box", "rank"]).reset_index(drop=True)
+    snapshot_df["rank_in_box"] = snapshot_df.groupby("box").cumcount() + 1
+
+    snapshot_rows = []
+
+    for _, row in snapshot_df.iterrows():
+        snapshot_rows.append(
+            {
+                "year": int(selected_year),
+                "round_number": int(current_round),
+                "box_number": int(row["box"]),
+                "rank_in_box": int(row["rank_in_box"]),
+                "overall_rank": int(row["rank"]),
+                "player_id": row["player_id"],
+                "player_name": row["player_name"],
+                "elo": float(row["elo"]),
+            }
+        )
+
+    insert_ladder_box_snapshot(snapshot_rows)
+
+    st.success("Current ladder saved as a box snapshot.")
+
 
 # ---------------------------------------------------
 # Recipient selection
@@ -224,6 +260,7 @@ st.markdown("---")
 st.subheader("Recipients")
 
 recipient_options_df = display_df.copy().sort_values(["box", "rank"]).reset_index(drop=True)
+
 recipient_labels = [
     f"Box {int(row.box)} — {row.player_name} ({row.email if row.email else 'no email'})"
     for row in recipient_options_df.itertuples()
@@ -267,6 +304,7 @@ if selected_recipients_df.empty:
     st.caption("Select one or more recipients to generate email drafts.")
     st.stop()
 
+
 # ---------------------------------------------------
 # Preview selected recipients + their boxes
 # ---------------------------------------------------
@@ -275,6 +313,7 @@ st.markdown("---")
 st.subheader("Selected Recipients + Box Preview")
 
 preview_rows = []
+
 for _, recipient in selected_recipients_df.sort_values(["box", "rank"]).iterrows():
     box_df = standings_df[standings_df["box"] == recipient["box"]].copy()
 
@@ -283,7 +322,9 @@ for _, recipient in selected_recipients_df.sort_values(["box", "rank"]).iterrows
             "Recipient": recipient["player_name"],
             "Recipient Email": recipient["email"],
             "Box": int(recipient["box"]),
-            "Box Players": ", ".join(box_df.sort_values("rank")["player_name"].tolist()),
+            "Box Players": ", ".join(
+                box_df.sort_values("rank")["player_name"].tolist()
+            ),
         }
     )
 
@@ -294,6 +335,7 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
 
 # ---------------------------------------------------
 # Draft builder
@@ -319,16 +361,17 @@ draft_mode = st.radio(
     index=0,
 )
 
-admin_password_expected = st.secrets.get("ADMIN_PASSWORD")
-
 if draft_mode == "One shared draft for all selected recipients":
-    unique_boxes = sorted(selected_recipients_df["box"].dropna().astype(int).unique().tolist())
+    unique_boxes = sorted(
+        selected_recipients_df["box"].dropna().astype(int).unique().tolist()
+    )
 
     shared_lines = [
-        f"Hi everyone,",
+        "Hi everyone,",
         "",
-        f"Here are the current ladder box groupings for {selected_year}.",
-        "",
+        f"Here are the current ladder box groupings for {selected_year} Round {current_round}.",
+        "Please coordinate and play 3 matches (plus a challenge match if you have one) in the next 3 weeks with the players in your box. If you have any questions please consult the Informtion page on the site or contact Laurence or myself!",
+        ""
     ]
 
     for box_number in unique_boxes:
@@ -336,14 +379,13 @@ if draft_mode == "One shared draft for all selected recipients":
         shared_lines.append(build_box_members_text(box_df))
         shared_lines.append("")
 
-    shared_lines.append("Feel free to coordinate matches directly with the players in your box.")
     shared_lines.append("")
     shared_lines.append("Best,")
     shared_lines.append("Karim")
 
     shared_subject = st.text_input(
         "Email subject",
-        value=f"{selected_year} Tennis Ladder — Current Box Groups",
+        value=f"{selected_year} Round {current_round} Dovercourt Ladder",
     )
 
     shared_body = st.text_area(
@@ -356,7 +398,9 @@ if draft_mode == "One shared draft for all selected recipients":
         selected_recipients_df["email"].fillna("").str.strip() != ""
     ].copy()
 
-    st.caption(f"Will send to {len(valid_recipients_df)} recipient(s) with valid email addresses.")
+    st.caption(
+        f"Will send to {len(valid_recipients_df)} recipient(s) with valid email addresses."
+    )
 
     if st.button("Send Shared Email", type="primary"):
         if not admin_password_expected:
@@ -408,6 +452,7 @@ else:
     for _, recipient in selected_recipients_df.sort_values(["box", "rank"]).iterrows():
         box_df = standings_df[standings_df["box"] == recipient["box"]].copy()
         subject = default_email_subject(selected_year, int(recipient["box"]))
+
         body = (
             f"Hi {recipient['player_name']},\n\n"
             f"{intro_text}\n\n"
@@ -425,12 +470,16 @@ else:
         )
 
     for draft in draft_payloads:
-        with st.expander(f"{draft['name']} — {draft['email'] if draft['email'] else 'no email'}", expanded=False):
+        with st.expander(
+            f"{draft['name']} — {draft['email'] if draft['email'] else 'no email'}",
+            expanded=False,
+        ):
             st.text_input(
                 f"Subject — {draft['name']}",
                 value=draft["subject"],
                 key=f"subject_{draft['email']}_{draft['name']}",
             )
+
             st.text_area(
                 f"Body — {draft['name']}",
                 value=draft["body"],
@@ -447,35 +496,37 @@ else:
             sent = 0
             failed = []
 
-        for draft in draft_payloads:
-            email = draft["email"]
-            if not email or not str(email).strip():
-                failed.append(f"{draft['name']}: no email address")
-                continue
+            for draft in draft_payloads:
+                email = draft["email"]
 
-            subject_value = st.session_state.get(
-                f"subject_{draft['email']}_{draft['name']}",
-                draft["subject"],
-            )
-            body_value = st.session_state.get(
-                f"body_{draft['email']}_{draft['name']}",
-                draft["body"],
-            )
+                if not email or not str(email).strip():
+                    failed.append(f"{draft['name']}: no email address")
+                    continue
 
-            try:
-                send_gmail_email(
-                    to_email=email,
-                    subject=subject_value,
-                    body=body_value,
+                subject_value = st.session_state.get(
+                    f"subject_{draft['email']}_{draft['name']}",
+                    draft["subject"],
                 )
-                sent += 1
-            except Exception as e:
-                failed.append(f"{draft['name']} ({email}): {e}")
 
-        if sent:
-            st.success(f"Sent {sent} email(s).")
+                body_value = st.session_state.get(
+                    f"body_{draft['email']}_{draft['name']}",
+                    draft["body"],
+                )
 
-        if failed:
-            st.error("Some emails failed:")
-            for item in failed:
-                st.write(f"- {item}")
+                try:
+                    send_gmail_email(
+                        to_email=email,
+                        subject=subject_value,
+                        body=body_value,
+                    )
+                    sent += 1
+                except Exception as e:
+                    failed.append(f"{draft['name']} ({email}): {e}")
+
+            if sent:
+                st.success(f"Sent {sent} email(s).")
+
+            if failed:
+                st.error("Some emails failed:")
+                for item in failed:
+                    st.write(f"- {item}")

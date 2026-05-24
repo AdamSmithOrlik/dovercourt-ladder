@@ -43,7 +43,6 @@ player_name_map = {
 # -----------------------------------------------------
 
 def build_score(match_id):
-
     s = sets_df[sets_df["match_id"] == match_id].sort_values("set_number")
 
     if s.empty:
@@ -65,7 +64,7 @@ matches_df["Winner"] = matches_df["winner_id"].map(player_name_map)
 
 
 # -----------------------------------------------------
-# YEAR FILTER
+# FILTERS
 # -----------------------------------------------------
 
 st.subheader("Filters")
@@ -73,17 +72,42 @@ st.subheader("Filters")
 current_year = datetime.now().year
 year_options = ["All"] + sorted(matches_df["match_date"].dt.year.unique())
 
-year_selected = st.selectbox(
-    "Year",
-    year_options,
-    index=year_options.index(current_year) if current_year in year_options else 0
-)
+col1, col2 = st.columns(2)
+
+with col1:
+    year_selected = st.selectbox(
+        "Year",
+        year_options,
+        index=year_options.index(current_year) if current_year in year_options else 0
+    )
+
+with col2:
+    player_options = ["No player selected"] + sorted(players_df["name"].dropna().tolist())
+
+    player_choice = st.selectbox(
+        "Player",
+        player_options,
+        index=0
+    )
 
 filtered_matches = matches_df.copy()
 
 if year_selected != "All":
     filtered_matches = filtered_matches[
         filtered_matches["match_date"].dt.year == year_selected
+    ]
+
+selected_player_id = None
+
+if player_choice != "No player selected":
+    selected_player_id = players_df.loc[
+        players_df["name"] == player_choice,
+        "player_id"
+    ].iloc[0]
+
+    filtered_matches = filtered_matches[
+        (filtered_matches["player_id"] == selected_player_id)
+        | (filtered_matches["opponent_id"] == selected_player_id)
     ]
 
 filtered_sets = sets_df[
@@ -121,7 +145,6 @@ if not filtered_matches.empty:
     )
 
 else:
-
     st.info("No matches for this selection.")
 
 
@@ -131,7 +154,20 @@ else:
 
 with st.expander("Head-to-Head Matrix"):
 
-    names = players_df["name"].tolist()
+    if selected_player_id is None:
+        matrix_players = players_df.copy()
+    else:
+        relevant_player_ids = set()
+
+        for _, match in filtered_matches.iterrows():
+            relevant_player_ids.add(match["player_id"])
+            relevant_player_ids.add(match["opponent_id"])
+
+        matrix_players = players_df[
+            players_df["player_id"].isin(relevant_player_ids)
+        ]
+
+    names = sorted(matrix_players["name"].dropna().tolist())
 
     matrix = pd.DataFrame("", index=names, columns=names)
 
@@ -149,56 +185,6 @@ with st.expander("Head-to-Head Matrix"):
             matrix.loc[o, p] += "W"
 
     st.dataframe(matrix, use_container_width=True)
-
-
-# -----------------------------------------------------
-# PLAYER RIVALRIES
-# -----------------------------------------------------
-
-st.subheader("Player Rivalries")
-
-player_choice = st.selectbox(
-    "Select Player",
-    players_df["name"]
-)
-
-player_id = players_df.loc[
-    players_df["name"] == player_choice, "player_id"
-].iloc[0]
-
-player_matches = filtered_matches[
-    (filtered_matches["player_id"] == player_id)
-    | (filtered_matches["opponent_id"] == player_id)
-]
-
-opponent_ids = []
-
-for _, m in player_matches.iterrows():
-
-    if m["player_id"] == player_id:
-        opponent_ids.append(m["opponent_id"])
-    else:
-        opponent_ids.append(m["player_id"])
-
-if opponent_ids:
-
-    rival_counts = pd.Series(opponent_ids).value_counts()
-
-    rivalry_df = pd.DataFrame({
-        "Opponent": [player_name_map[i] for i in rival_counts.index],
-        "Matches Played": rival_counts.values
-    })
-
-    st.dataframe(
-        rivalry_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-
-    st.write("No rivalries yet.")
-
 
 # -----------------------------------------------------
 # MATCH DETAILS
@@ -229,10 +215,6 @@ else:
             filtered_sets["match_id"] == row["match_id"]
         ].sort_values("set_number")
 
-        # -------------------------------------------------
-        # BUILD SCORE STRING
-        # -------------------------------------------------
-
         score_parts = []
 
         if not match_sets.empty:
@@ -245,10 +227,6 @@ else:
                 score_parts.append(f"{p_games}-{o_games}")
 
         score_text = ", ".join(score_parts)
-
-        # -------------------------------------------------
-        # EXPANDER TITLE
-        # -------------------------------------------------
 
         title = f"{winner} def. {loser} {score_text} — {row['type']}"
 
