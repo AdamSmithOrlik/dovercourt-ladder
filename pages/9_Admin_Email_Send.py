@@ -103,11 +103,11 @@ def build_box_members_text(box_df: pd.DataFrame) -> str:
         cell = row["cell_phone"]
 
         if email and cell:
-            lines.append(f"{int(row['rank'])}. {name} — {email} | {cell}")
+            lines.append(f"{int(row['rank'])}. {name} | {email} | {cell}")
         elif email:
-            lines.append(f"{int(row['rank'])}. {name} — {email}")
+            lines.append(f"{int(row['rank'])}. {name} | {email}")
         elif cell:
-            lines.append(f"{int(row['rank'])}. {name} — {cell}")
+            lines.append(f"{int(row['rank'])}. {name} | {cell}")
         else:
             lines.append(f"{int(row['rank'])}. {name}")
 
