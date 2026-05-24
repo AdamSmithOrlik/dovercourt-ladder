@@ -449,3 +449,43 @@ def send_match_edit_email(subject: str, body: str):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(gmail_address, gmail_app_password)
         smtp.send_message(msg)
+
+def insert_ladder_box_snapshot(rows: list[dict]):
+    supabase = get_supabase()
+
+    response = (
+        supabase.table("ladder_box_snapshots")
+        .insert(rows)
+        .execute()
+    )
+
+    return response.data
+
+
+def get_latest_ladder_box_snapshot(year: int):
+    supabase = get_supabase()
+
+    latest_response = (
+        supabase.table("ladder_box_snapshots")
+        .select("created_at")
+        .eq("year", year)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not latest_response.data:
+        return []
+
+    latest_created_at = latest_response.data[0]["created_at"]
+
+    response = (
+        supabase.table("ladder_box_snapshots")
+        .select("*")
+        .eq("year", year)
+        .eq("created_at", latest_created_at)
+        .order("overall_rank")
+        .execute()
+    )
+
+    return response.data
