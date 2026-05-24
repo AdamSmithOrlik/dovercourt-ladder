@@ -17,7 +17,7 @@ from utils.rounds import (
     get_season_start_date,
     get_round_cutoff_exclusive,
 )
-from utils.ladder import compute_live_ranking
+from utils.ladder import compute_live_ranking, assign_boxes
 from db import get_latest_ladder_box_snapshot
 
 st.set_page_config(page_title="Ladder", layout="wide")
