@@ -556,21 +556,35 @@ if snapshot_df.empty:
     seeded_table = format_ladder_table(live_df)
     snapshot_caption = "No saved box snapshot found yet, showing live boxes."
 else:
-    seeded_table = snapshot_df.rename(
+    snapshot_formatted = snapshot_df.rename(
         columns={
-            "box_number": "Box",
-            "overall_rank": "Rank",
-            "player_name": "Player",
-            "elo": "Elo",
+            "box_number": "box",
+            "overall_rank": "rank",
+            "player_name": "player_name",
+            "elo": "elo",
         }
     )
 
-    seeded_table["Round Record"] = ""
-    seeded_table["Record"] = ""
+    snapshot_formatted = snapshot_formatted.merge(
+        stats_df[
+            [
+                "player_id",
+                "wins",
+                "losses",
+                "round_wins",
+                "round_losses",
+            ]
+        ],
+        on="player_id",
+        how="left",
+    )
 
-    seeded_table = seeded_table[
-        ["player_id", "Box", "Rank", "Player", "Round Record", "Record", "Elo"]
-    ].sort_values(["Box", "Rank"]).reset_index(drop=True)
+    snapshot_formatted["wins"] = snapshot_formatted["wins"].fillna(0).astype(int)
+    snapshot_formatted["losses"] = snapshot_formatted["losses"].fillna(0).astype(int)
+    snapshot_formatted["round_wins"] = snapshot_formatted["round_wins"].fillna(0).astype(int)
+    snapshot_formatted["round_losses"] = snapshot_formatted["round_losses"].fillna(0).astype(int)
+
+    seeded_table = format_ladder_table(snapshot_formatted)
 
     snapshot_round = int(snapshot_df["round_number"].iloc[0])
     snapshot_created_at = snapshot_df["created_at"].iloc[0]
@@ -596,7 +610,6 @@ with left_col:
             "Rank": st.column_config.TextColumn("Rank", width="small"),
             "Player": st.column_config.TextColumn("Player", width="medium"),
             "Round Record": st.column_config.TextColumn("Round Record", width="small"),
-            "Record": st.column_config.TextColumn("Record", width="small"),
             "Elo": st.column_config.NumberColumn("Elo", format="%.1f", width="small"),
         },
     )
