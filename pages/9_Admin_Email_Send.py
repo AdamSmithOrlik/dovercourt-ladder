@@ -226,30 +226,43 @@ st.caption(
     f"{selected_year}, Round {current_round}."
 )
 
+snapshot_password_input = st.text_input(
+    "Admin password for snapshot",
+    type="password",
+    key="snapshot_admin_password_input",
+)
+
+snapshot_admin_password_expected = st.secrets.get("ADMIN_PASSWORD")
+
 if st.button("Save Current Ladder as Box Snapshot"):
-    snapshot_df = standings_df.copy()
-    snapshot_df = snapshot_df.sort_values(["box", "rank"]).reset_index(drop=True)
-    snapshot_df["rank_in_box"] = snapshot_df.groupby("box").cumcount() + 1
+    if not snapshot_admin_password_expected:
+        st.error("ADMIN_PASSWORD is not set in Streamlit secrets.")
+    elif snapshot_password_input != snapshot_admin_password_expected:
+        st.error("Incorrect admin password.")
+    else:
+        snapshot_df = standings_df.copy()
+        snapshot_df = snapshot_df.sort_values(["box", "rank"]).reset_index(drop=True)
+        snapshot_df["rank_in_box"] = snapshot_df.groupby("box").cumcount() + 1
 
-    snapshot_rows = []
+        snapshot_rows = []
 
-    for _, row in snapshot_df.iterrows():
-        snapshot_rows.append(
-            {
-                "year": int(selected_year),
-                "round_number": int(current_round),
-                "box_number": int(row["box"]),
-                "rank_in_box": int(row["rank_in_box"]),
-                "overall_rank": int(row["rank"]),
-                "player_id": row["player_id"],
-                "player_name": row["player_name"],
-                "elo": float(row["elo"]),
-            }
-        )
+        for _, row in snapshot_df.iterrows():
+            snapshot_rows.append(
+                {
+                    "year": int(selected_year),
+                    "round_number": int(current_round),
+                    "box_number": int(row["box"]),
+                    "rank_in_box": int(row["rank_in_box"]),
+                    "overall_rank": int(row["rank"]),
+                    "player_id": row["player_id"],
+                    "player_name": row["player_name"],
+                    "elo": float(row["elo"]),
+                }
+            )
 
-    insert_ladder_box_snapshot(snapshot_rows)
+        insert_ladder_box_snapshot(snapshot_rows)
 
-    st.success("Current ladder saved as a box snapshot.")
+        st.success("Current ladder saved as a box snapshot.")
 
 
 # ---------------------------------------------------
