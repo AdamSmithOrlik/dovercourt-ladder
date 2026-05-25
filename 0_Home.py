@@ -301,12 +301,14 @@ elif st.session_state.active_page == "signup":
 
         name = st.text_input("Name")
         email = st.text_input("Email")
+        cell_phone = st.text_input("Cell Phone")
 
         submitted = st.form_submit_button("Sign Up")
 
     if submitted:
         clean_name = name.strip()
         clean_email = email.strip().lower()
+        clean_cell_phone = cell_phone.strip()
 
         if not clean_name or not clean_email:
             st.error("Name and email are required.")
@@ -338,6 +340,7 @@ elif st.session_state.active_page == "signup":
                 player_data = {
                     "name": clean_name,
                     "email": clean_email,
+                    "cell_phone": clean_cell_phone,
                 }
 
                 insert_player(player_data)

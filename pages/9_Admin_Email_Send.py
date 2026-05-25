@@ -370,7 +370,7 @@ if draft_mode == "One shared draft for all selected recipients":
         "Hi everyone,",
         "",
         f"Here are the current ladder box groupings for {selected_year} Round {current_round}.",
-        "Please coordinate and play 3 matches (plus a challenge match if you have one) in the next 3 weeks with the players in your box. If you have any questions please consult the Informtion page on the site or contact Laurence or myself!",
+        "Please coordinate and play 3 matches (plus a challenge match if you have one) in the next 3 weeks with the players in your box. If you have any questions please consult the Information page on the site or contact Laurence/myself!",
         ""
     ]
 
