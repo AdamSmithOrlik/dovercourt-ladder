@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 from db import (
     get_active_players,
@@ -9,7 +10,7 @@ from db import (
     get_sets,
 )
 
-from utils.elo import get_latest_elo_standings, get_elo_time_series
+from utils.elo import DEFAULT_INITIAL_RATING, get_latest_elo_standings, get_elo_time_series
 from utils.rounds import (
     get_round_window,
     get_last_completed_round_from_date,
@@ -67,6 +68,9 @@ def format_ladder_table(df: pd.DataFrame) -> pd.DataFrame:
     display_table = display_table[
         ["player_id", "Box", "Rank", "Player", "Round Record", "Record", "Elo"]
     ].sort_values(["Box", "Rank"], ascending=[True, True]).reset_index(drop=True)
+
+    display_table["Box"] = display_table["Box"].astype(str)
+    display_table["Rank"] = display_table["Rank"].astype(str)
 
     table_rows = []
 
@@ -406,9 +410,11 @@ def get_player_season_match_history(year: int, player_id) -> pd.DataFrame:
     history_df["elo"] = pd.to_numeric(history_df["elo"], errors="coerce")
     history_df["elo_change"] = pd.to_numeric(history_df["elo_change"], errors="coerce")
 
+    history_df = history_df.sort_values(["match_date", "match_id"]).reset_index(drop=True)
+
     return history_df[
-        ["match_date", "opponent_name", "result", "score", "elo", "elo_change"]
-    ].sort_values(["match_date", "match_id"])
+        ["match_id", "match_date", "opponent_name", "result", "score", "elo", "elo_change"]
+    ]
 
 
 def render_player_details(year: int, player_id, player_name: str) -> None:
@@ -457,14 +463,57 @@ def render_player_details(year: int, player_id, player_name: str) -> None:
 
     chart_df = season_history_df.copy()
     chart_df = chart_df.dropna(subset=["match_date", "elo"])
-    chart_df = chart_df.sort_values("match_date")
+    chart_df["match_date"] = pd.to_datetime(chart_df["match_date"], errors="coerce")
+    chart_df["elo"] = pd.to_numeric(chart_df["elo"], errors="coerce")
+    chart_df["elo_change"] = pd.to_numeric(chart_df["elo_change"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["match_date", "elo"])
+    chart_df = chart_df.sort_values(["match_date", "match_id"]).reset_index(drop=True)
 
     if not chart_df.empty:
-        chart_df = chart_df[["match_date", "elo"]].rename(
-            columns={"match_date": "Date", "elo": "Elo"}
+        season_start = pd.to_datetime(get_season_start_date(year), errors="coerce")
+        baseline_df = pd.DataFrame(
+            [
+                {
+                    "match_date": season_start,
+                    "match_id": "season-start",
+                    "opponent_name": "Season start",
+                    "result": "-",
+                    "score": "",
+                    "elo": float(DEFAULT_INITIAL_RATING),
+                    "elo_change": 0.0,
+                }
+            ]
         )
-        chart_df = chart_df.set_index("Date")
-        st.line_chart(chart_df)
+
+        chart_df = pd.concat([baseline_df, chart_df], ignore_index=True)
+        chart_df["Date"] = chart_df["match_date"].dt.strftime("%Y-%m-%d")
+
+        y_min = max(1200, float(chart_df["elo"].min()) - 20)
+        y_max = min(1800, float(chart_df["elo"].max()) + 20)
+
+        base = alt.Chart(chart_df).encode(
+            x=alt.X("match_date:T", title="Date"),
+            y=alt.Y(
+                "elo:Q",
+                title="Elo",
+                scale=alt.Scale(domain=[y_min, y_max], zero=False),
+            ),
+            tooltip=[
+                alt.Tooltip("Date:N", title="Date"),
+                alt.Tooltip("opponent_name:N", title="Opponent"),
+                alt.Tooltip("result:N", title="Result"),
+                alt.Tooltip("score:N", title="Score"),
+                alt.Tooltip("elo:Q", title="Elo", format=".1f"),
+                alt.Tooltip("elo_change:Q", title="Elo +/-", format="+.1f"),
+            ],
+        )
+
+        chart = (
+            base.mark_line(point=False, color="#2E6F95", strokeWidth=3)
+            + base.mark_circle(size=70, color="#2E6F95")
+        ).properties(height=320)
+
+        st.altair_chart(chart.interactive(), use_container_width=True)
 
 
 # ---------------------------------------------------
