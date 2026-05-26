@@ -37,7 +37,12 @@ def compute_margin_multiplier(
     """Compute margin multiplier using total game differential from set rows.
 
     Formula:
-        margin_multiplier = (games_winner - games_loser) / total_games
+        margin_multiplier = abs(player_games - opponent_games) / total_games
+
+    Scores are stored from the match player/opponent perspective, but submitted
+    scores may be entered from the winner's perspective. Using the absolute
+    game differential keeps decisive scorelines decisive even if the winner is
+    listed as the opponent on the match row.
     """
     if set_rows.empty:
         return None
@@ -57,21 +62,15 @@ def compute_margin_multiplier(
     total_player_games = float(cleaned_sets["player_games"].sum())
     total_opponent_games = float(cleaned_sets["opponent_games"].sum())
 
-    if winner_id == player_id:
-        games_winner = total_player_games
-        games_loser = total_opponent_games
-    elif winner_id == opponent_id:
-        games_winner = total_opponent_games
-        games_loser = total_player_games
-    else:
+    if winner_id not in {player_id, opponent_id}:
         return None
 
-    total_games = games_winner + games_loser
+    total_games = total_player_games + total_opponent_games
 
     if total_games <= 0:
         return None
 
-    game_diff = games_winner - games_loser
+    game_diff = abs(total_player_games - total_opponent_games)
     return game_diff / total_games
 
 
