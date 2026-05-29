@@ -10,8 +10,8 @@ ROUND_1_START = date(2026, 5, 1)
 ROUND_1_END = date(2026, 5, 24)
 
 # After round 1, each round starts every 18 days
-SUBSEQUENT_ROUND_LENGTH_DAYS = 18
-SEASON_END = date(2026, 9, 30)
+SUBSEQUENT_ROUND_LENGTH_DAYS = 21
+SEASON_END = date(2026, 9, 27)
 
 SEASON_START_DATES = {
     2025: "2025-04-01",
@@ -121,3 +121,9 @@ def get_round_cutoff_exclusive(round_end_date: date) -> str:
     so to include the whole round end date we pass the next day.
     """
     return (round_end_date + timedelta(days=1)).isoformat()
+
+if __name__ == "__main__":
+    rounds = build_round_windows_2026()
+
+    for r in rounds:
+        print(r)
