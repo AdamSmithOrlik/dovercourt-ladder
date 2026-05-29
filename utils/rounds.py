@@ -121,9 +121,3 @@ def get_round_cutoff_exclusive(round_end_date: date) -> str:
     so to include the whole round end date we pass the next day.
     """
     return (round_end_date + timedelta(days=1)).isoformat()
-
-if __name__ == "__main__":
-    rounds = build_round_windows_2026()
-
-    for r in rounds:
-        print(r)

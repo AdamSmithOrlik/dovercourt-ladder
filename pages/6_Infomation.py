@@ -129,7 +129,7 @@ with st.expander("Contact Information"):
     st.markdown(
         """
         Dovercourt Ladder Organizer: Laurence Braun [laurencewbraun@gmail](mailto:laurencewbraun@gmail.com) \n
-        Dovercourt Ladder Website Admin: Karim Sayed [karimelsayed44800@gmail.com](mailto:karimelsayed44800@gmail.com) \n
+        Dovercourt Ladder Website Admin: Karim El Sayed 647 830 6743 [karimelsayed44800@gmail.com](mailto:karimelsayed44800@gmail.com) \n
         Dovercourt Ladder Website Admin: Adam Smith [adam.smith2214@gmail.com](mailto:adam.smith2214@gmail.com)
         """
     )
