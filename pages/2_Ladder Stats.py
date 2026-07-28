@@ -3,7 +3,6 @@ import pandas as pd
 import altair as alt
 
 from db import (
-    get_active_players,
     get_players,
     get_matches_for_year,
     get_sets,
@@ -18,8 +17,8 @@ st.title("Player Details")
 # Helpers
 # ---------------------------------------------------
 
-def get_active_player_lookup() -> pd.DataFrame:
-    active_players = get_active_players()
+def get_player_lookup() -> pd.DataFrame:
+    active_players = get_players()
     active_df = pd.DataFrame(active_players) if active_players else pd.DataFrame()
 
     if active_df.empty:
@@ -515,7 +514,7 @@ with top_col1:
         index=0,
     )
 
-player_lookup_df = get_active_player_lookup()
+player_lookup_df = get_player_lookup()
 
 
 
