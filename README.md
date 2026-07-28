@@ -88,7 +88,7 @@ git clone <repo-url>
 cd dovercourt-ladder
 ```
 
-## How to setup a new round
+# How to setup a new round
 1. Wait until the day a new round has started, not the day before.
 2. Make sure everyone who is supposed to be active/inactive is
 3. On the admin page, press "Save Current Ladder as box Snapshot". This saves the ladder as it is to the supabase, to be used for the comparison as the round progresses.
