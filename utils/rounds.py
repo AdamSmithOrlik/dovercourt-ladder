@@ -11,7 +11,7 @@ ROUND_1_END = date(2026, 5, 24)
 
 # After round 1, each round starts every 18 days
 SUBSEQUENT_ROUND_LENGTH_DAYS = 21
-SEASON_END = date(2026, 9, 27)
+SEASON_END = date(2026, 12, 31)
 
 SEASON_START_DATES = {
     2025: "2025-04-01",
